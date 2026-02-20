@@ -1,0 +1,1284 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AppHub — Internal Tools</title>
+  <style>
+/* ── Reset & Base ──────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── Design Tokens ─────────────────────────────────────────── */
+:root {
+  /* Accent — single color, indigo */
+  --accent:        #6366f1;
+  --accent-hover:  #4f52d8;
+  --accent-subtle: rgba(99, 102, 241, 0.10);
+  --accent-glow:   rgba(99, 102, 241, 0.18);
+
+  /* Status */
+  --live-bg:      rgba(16, 185, 129, 0.12);
+  --live-text:    #059669;
+  --beta-bg:      rgba(245, 158, 11, 0.12);
+  --beta-text:    #d97706;
+  --internal-bg:  rgba(99, 102, 241, 0.12);
+  --internal-text:#6366f1;
+
+  /* Surface — light mode */
+  --bg-page:   #f4f5f9;
+  --bg-surface:#ffffff;
+  --bg-sidebar:#ffffff;
+  --bg-topbar: #ffffff;
+
+  /* Text */
+  --text-primary:   #111827;
+  --text-secondary: #6b7280;
+  --text-muted:     #9ca3af;
+  --text-on-accent: #ffffff;
+
+  /* Borders & shadows */
+  --border:       rgba(0, 0, 0, 0.07);
+  --border-focus: var(--accent);
+  --shadow-xs: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.07), 0 1px 3px rgba(0,0,0,0.05);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.09), 0 2px 6px rgba(0,0,0,0.05);
+  --shadow-card-hover: 0 8px 24px rgba(0,0,0,0.10), 0 2px 8px rgba(0,0,0,0.06);
+
+  /* Layout */
+  --topbar-h:   60px;
+  --sidebar-w:  224px;
+  --radius-sm:  8px;
+  --radius-md:  12px;
+  --radius-lg:  16px;
+
+  /* Transitions */
+  --t-fast: 120ms ease;
+  --t-base: 200ms ease;
+  --t-slow: 300ms ease;
+
+  /* Typography */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+}
+
+/* ── Dark Mode ─────────────────────────────────────────────── */
+[data-theme="dark"] {
+  --bg-page:   #0d0f14;
+  --bg-surface:#161921;
+  --bg-sidebar:#161921;
+  --bg-topbar: #161921;
+
+  --text-primary:   #f1f3f9;
+  --text-secondary: #8b92a5;
+  --text-muted:     #555e72;
+
+  --border: rgba(255, 255, 255, 0.07);
+
+  --shadow-xs: 0 1px 3px rgba(0,0,0,0.25);
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.35);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.45);
+  --shadow-card-hover: 0 8px 28px rgba(0,0,0,0.55);
+
+  --live-bg:      rgba(16, 185, 129, 0.15);
+  --live-text:    #34d399;
+  --beta-bg:      rgba(245, 158, 11, 0.15);
+  --beta-text:    #fbbf24;
+  --internal-bg:  rgba(99, 102, 241, 0.18);
+  --internal-text:#818cf8;
+}
+
+/* ── Global ────────────────────────────────────────────────── */
+html { font-size: 15px; }
+
+body {
+  font-family: var(--font);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  line-height: 1.5;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { text-decoration: none; color: inherit; }
+ul { list-style: none; }
+button { cursor: pointer; border: none; background: none; }
+
+/* ── Top Bar ───────────────────────────────────────────────── */
+.topbar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: var(--topbar-h);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+  background: var(--bg-topbar);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-xs);
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+  width: calc(var(--sidebar-w) - 20px);
+}
+
+.topbar-center {
+  flex: 1;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* Sidebar toggle */
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.sidebar-toggle:hover {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+/* Logo */
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+.logo-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  font-size: 0.875rem;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+/* Search */
+.search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 10px 0 12px;
+  background: var(--bg-page);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.search-wrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  background: var(--bg-surface);
+}
+.search-icon { color: var(--text-muted); flex-shrink: 0; }
+.search-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  outline: none;
+}
+.search-input::placeholder { color: var(--text-muted); }
+.search-kbd {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 5px;
+  flex-shrink: 0;
+}
+[data-theme="dark"] .search-kbd { background: var(--bg-page); }
+
+/* Icon buttons */
+.icon-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.icon-btn:hover {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+/* Notification dot */
+.notif-dot {
+  position: absolute;
+  top: 7px; right: 7px;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  border: 1.5px solid var(--bg-topbar);
+}
+
+/* Theme toggle icons */
+.icon-sun  { display: block; }
+.icon-moon { display: none; }
+[data-theme="dark"] .icon-sun  { display: none; }
+[data-theme="dark"] .icon-moon { display: block; }
+
+/* User chip */
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 6px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+  margin-left: 4px;
+}
+.user-chip:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+}
+.user-chip svg { color: var(--text-muted); }
+
+.avatar {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  font-size: 0.65rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: 0.03em;
+}
+
+.user-name {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* ── Layout Shell ──────────────────────────────────────────── */
+.layout {
+  display: flex;
+  min-height: 100vh;
+  padding-top: var(--topbar-h);
+}
+
+/* ── Sidebar ───────────────────────────────────────────────── */
+.sidebar {
+  position: fixed;
+  top: var(--topbar-h);
+  left: 0;
+  bottom: 0;
+  width: var(--sidebar-w);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 20px 12px;
+  transition: transform var(--t-slow), opacity var(--t-slow);
+  z-index: 50;
+}
+
+.sidebar.collapsed {
+  transform: translateX(calc(-1 * var(--sidebar-w)));
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Scrollbar */
+.sidebar::-webkit-scrollbar { width: 4px; }
+.sidebar::-webkit-scrollbar-track { background: transparent; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+.sidebar-nav ul { display: flex; flex-direction: column; gap: 2px; }
+
+.nav-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0 10px;
+  margin-bottom: 6px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: background var(--t-fast), color var(--t-fast);
+  position: relative;
+}
+.nav-item:hover {
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+}
+.nav-item.active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
+}
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 50%; transform: translateY(-50%);
+  height: 60%;
+  width: 3px;
+  background: var(--accent);
+  border-radius: 0 3px 3px 0;
+}
+
+.nav-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+.nav-item.active .nav-icon,
+.nav-item:hover .nav-icon { opacity: 1; }
+
+.nav-count {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border-radius: 20px;
+  padding: 1px 7px;
+}
+
+.sidebar-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 14px 0;
+}
+
+/* ── Main Content ──────────────────────────────────────────── */
+.main {
+  flex: 1;
+  margin-left: var(--sidebar-w);
+  padding: 32px 32px 64px;
+  min-width: 0;
+  transition: margin-left var(--t-slow);
+}
+.main.sidebar-collapsed { margin-left: 0; }
+
+/* Page Header */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+}
+
+.page-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.page-subtitle {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+/* Filter Tabs */
+.filter-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: var(--shadow-xs);
+}
+
+.filter-tab {
+  padding: 5px 14px;
+  border-radius: 7px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: background var(--t-fast), color var(--t-fast), box-shadow var(--t-fast);
+}
+.filter-tab:hover { color: var(--text-primary); }
+.filter-tab.active {
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 2px 6px rgba(99,102,241,0.35);
+}
+
+/* ── App Grid ──────────────────────────────────────────────── */
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+/* ── App Card ──────────────────────────────────────────────── */
+.app-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  box-shadow: var(--shadow-sm);
+  transition:
+    transform var(--t-base),
+    box-shadow var(--t-base),
+    border-color var(--t-base);
+  cursor: default;
+  position: relative;
+  overflow: hidden;
+}
+
+.app-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: rgba(99, 102, 241, 0.2);
+}
+
+/* Card top row */
+.card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.app-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3rem;
+  flex-shrink: 0;
+  box-shadow: var(--shadow-xs);
+}
+
+/* Status badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border-radius: 20px;
+  text-transform: uppercase;
+}
+
+.badge::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.badge-live {
+  background: var(--live-bg);
+  color: var(--live-text);
+}
+.badge-beta {
+  background: var(--beta-bg);
+  color: var(--beta-text);
+}
+.badge-internal {
+  background: var(--internal-bg);
+  color: var(--internal-text);
+}
+
+/* Card body */
+.app-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.015em;
+  margin-bottom: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-desc {
+  font-size: 0.825rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 2.4em;
+}
+
+/* Card footer */
+.card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.app-meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+/* Open button */
+.btn-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 2px 8px rgba(99,102,241,0.30);
+  transition: background var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast);
+  cursor: pointer;
+  border: none;
+}
+.btn-open:hover {
+  background: var(--accent-hover);
+  box-shadow: 0 4px 12px rgba(99,102,241,0.40);
+  transform: translateY(-1px);
+}
+.btn-open:active { transform: translateY(0); }
+
+.btn-open svg {
+  transition: transform var(--t-fast);
+}
+.btn-open:hover svg {
+  transform: translateX(2px);
+}
+
+/* ── Empty State ───────────────────────────────────────────── */
+.empty-state {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 80px 0;
+  color: var(--text-muted);
+}
+.empty-state p {
+  font-size: 0.9rem;
+}
+
+/* ── Responsive ────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .sidebar {
+    transform: translateX(calc(-1 * var(--sidebar-w)));
+    opacity: 0;
+    pointer-events: none;
+    box-shadow: var(--shadow-md);
+  }
+  .sidebar.mobile-open {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .main { margin-left: 0; }
+  .topbar-left { width: auto; }
+  .user-name { display: none; }
+  .search-kbd { display: none; }
+}
+
+@media (max-width: 600px) {
+  .main { padding: 20px 16px 48px; }
+  .page-header { flex-direction: column; }
+  .app-grid { grid-template-columns: 1fr; }
+  .filter-tabs { flex-wrap: wrap; }
+}
+
+/* ── Animations ────────────────────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.app-card {
+  animation: fadeUp 0.25s ease both;
+}
+
+/* Stagger cards */
+.app-card:nth-child(1)  { animation-delay: 0.02s; }
+.app-card:nth-child(2)  { animation-delay: 0.04s; }
+.app-card:nth-child(3)  { animation-delay: 0.06s; }
+.app-card:nth-child(4)  { animation-delay: 0.08s; }
+.app-card:nth-child(5)  { animation-delay: 0.10s; }
+.app-card:nth-child(6)  { animation-delay: 0.12s; }
+.app-card:nth-child(7)  { animation-delay: 0.14s; }
+.app-card:nth-child(8)  { animation-delay: 0.16s; }
+.app-card:nth-child(9)  { animation-delay: 0.18s; }
+.app-card:nth-child(10) { animation-delay: 0.20s; }
+.app-card:nth-child(11) { animation-delay: 0.22s; }
+.app-card:nth-child(12) { animation-delay: 0.24s; }
+
+/* ── Overlay (mobile sidebar backdrop) ─────────────────────── */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 40;
+  backdrop-filter: blur(2px);
+}
+.sidebar-overlay.active { display: block; }
+
+</style>
+</head>
+<body>
+
+  <!-- ── Top Bar ────────────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="2" y1="4.5" x2="16" y2="4.5"/>
+          <line x1="2" y1="9"   x2="16" y2="9"/>
+          <line x1="2" y1="13.5" x2="16" y2="13.5"/>
+        </svg>
+      </button>
+      <div class="logo">
+        <span class="logo-mark">A</span>
+        <span class="logo-text">AppHub</span>
+      </div>
+    </div>
+
+    <div class="topbar-center">
+      <div class="search-wrap">
+        <svg class="search-icon" width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="6.5" cy="6.5" r="4.5"/>
+          <line x1="10.5" y1="10.5" x2="13.5" y2="13.5"/>
+        </svg>
+        <input
+          type="text"
+          id="searchInput"
+          class="search-input"
+          placeholder="Search apps…"
+          autocomplete="off"
+        />
+        <kbd class="search-kbd">⌘K</kbd>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <button class="icon-btn" id="notifBtn" aria-label="Notifications" title="Notifications">
+        <svg width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8.5 1.5a5 5 0 0 1 5 5v2.5l1.5 2H2L3.5 9V6.5a5 5 0 0 1 5-5z"/>
+          <path d="M7 13.5a1.5 1.5 0 0 0 3 0"/>
+        </svg>
+        <span class="notif-dot"></span>
+      </button>
+
+      <button class="icon-btn theme-btn" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">
+        <svg class="icon-sun" width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="8.5" cy="8.5" r="3"/>
+          <line x1="8.5" y1="1"   x2="8.5" y2="3"/>
+          <line x1="8.5" y1="14"  x2="8.5" y2="16"/>
+          <line x1="1"   y1="8.5" x2="3"   y2="8.5"/>
+          <line x1="14"  y1="8.5" x2="16"  y2="8.5"/>
+          <line x1="3.2" y1="3.2" x2="4.6" y2="4.6"/>
+          <line x1="12.4" y1="12.4" x2="13.8" y2="13.8"/>
+          <line x1="12.4" y1="3.2"  x2="13.8" y2="4.6"/>  <!-- wrong direction, recalc below -->
+          <line x1="3.2"  y1="12.4" x2="4.6"  y2="13.8"/>
+        </svg>
+        <svg class="icon-moon" width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14.5 10.5A7 7 0 0 1 6.5 2.5a7 7 0 1 0 8 8z"/>
+        </svg>
+      </button>
+
+      <div class="user-chip">
+        <div class="avatar" aria-hidden="true">JD</div>
+        <span class="user-name">Jane Doe</span>
+        <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="2,4 5.5,7.5 9,4"/>
+        </svg>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Body Layout ────────────────────────────────────────── -->
+  <div class="layout">
+
+    <!-- Left Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <nav class="sidebar-nav" aria-label="App categories">
+        <p class="nav-label">Categories</p>
+        <ul id="categoryList">
+          <li>
+            <a href="#" class="nav-item active" data-category="all">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="1" y="1" width="5.5" height="5.5" rx="1.2"/>
+                  <rect x="8.5" y="1" width="5.5" height="5.5" rx="1.2"/>
+                  <rect x="1" y="8.5" width="5.5" height="5.5" rx="1.2"/>
+                  <rect x="8.5" y="8.5" width="5.5" height="5.5" rx="1.2"/>
+                </svg>
+              </span>
+              All Apps
+              <span class="nav-count" id="allCount">12</span>
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="analytics">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="1,12 5,7 8.5,9.5 13,3"/>
+                  <polyline points="10,3 13,3 13,6"/>
+                </svg>
+              </span>
+              Analytics
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="devtools">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="4,5 1,7.5 4,10"/>
+                  <polyline points="11,5 14,7.5 11,10"/>
+                  <line x1="9" y1="3" x2="6" y2="12"/>
+                </svg>
+              </span>
+              Dev Tools
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="finance">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="7.5" cy="7.5" r="6"/>
+                  <path d="M7.5 4v1.5m0 4V11m-2-3.5h3.5a1.5 1.5 0 0 0 0-3H7a1.5 1.5 0 0 0 0 3h1.5a1.5 1.5 0 0 1 0 3H5.5"/>
+                </svg>
+              </span>
+              Finance
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="hr">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="7.5" cy="5" r="2.5"/>
+                  <path d="M2 13c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/>
+                </svg>
+              </span>
+              HR
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="ops">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="7.5" cy="7.5" r="2"/>
+                  <path d="M7.5 1.5v1.2M7.5 12.3v1.2M1.5 7.5h1.2M12.3 7.5h1.2M3.2 3.2l.85.85M10.95 10.95l.85.85M10.95 3.2l-.85.85M4.05 10.95l-.85.85"/>
+                </svg>
+              </span>
+              Operations
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="marketing">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2 10.5L12 3l-2 10-4-3-4 3z"/>
+                  <line x1="10" y1="3" x2="6" y2="10.5"/>
+                </svg>
+              </span>
+              Marketing
+            </a>
+          </li>
+        </ul>
+
+        <div class="sidebar-divider"></div>
+
+        <p class="nav-label">Quick Links</p>
+        <ul>
+          <li>
+            <a href="#" class="nav-item" data-category="recent">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="7.5" cy="7.5" r="6"/>
+                  <polyline points="7.5,4 7.5,7.5 9.5,9.5"/>
+                </svg>
+              </span>
+              Recently Opened
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="favorites">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="7.5,1.5 9.2,5.7 13.8,6.1 10.4,9 11.5,13.5 7.5,11 3.5,13.5 4.6,9 1.2,6.1 5.8,5.7"/>
+                </svg>
+              </span>
+              Favorites
+            </a>
+          </li>
+        </ul>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main" id="main">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title" id="pageTitle">All Apps</h1>
+          <p class="page-subtitle" id="pageSubtitle">12 apps available</p>
+        </div>
+        <div class="header-actions">
+          <div class="filter-tabs">
+            <button class="filter-tab active" data-status="all">All</button>
+            <button class="filter-tab" data-status="live">Live</button>
+            <button class="filter-tab" data-status="beta">Beta</button>
+            <button class="filter-tab" data-status="internal">Internal</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="app-grid" id="appGrid">
+        <!-- Cards injected by app.js -->
+      </div>
+
+      <div class="empty-state" id="emptyState" hidden>
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity=".35">
+          <circle cx="18" cy="18" r="12"/>
+          <line x1="28" y1="28" x2="37" y2="37"/>
+        </svg>
+        <p>No apps match your search.</p>
+      </div>
+    </main>
+  </div>
+
+  <script>
+/* ── App Data ──────────────────────────────────────────────── */
+const APPS = [
+  {
+    id: 1,
+    name: "Metrics Dashboard",
+    description: "Real-time KPIs, revenue trends, and cohort analysis across all products.",
+    icon: "📊",
+    iconBg: "#eef2ff",
+    iconBgDark: "#1e1f3a",
+    category: "analytics",
+    status: "live",
+    owner: "Data Team",
+    url: "#",
+  },
+  {
+    id: 2,
+    name: "Deploy Console",
+    description: "One-click deployments, rollbacks, and environment management.",
+    icon: "🚀",
+    iconBg: "#fef3c7",
+    iconBgDark: "#29210a",
+    category: "devtools",
+    status: "live",
+    owner: "Platform",
+    url: "#",
+  },
+  {
+    id: 3,
+    name: "Expense Tracker",
+    description: "Submit, approve, and track team expenses with policy checks built in.",
+    icon: "💳",
+    iconBg: "#ecfdf5",
+    iconBgDark: "#0a1f16",
+    category: "finance",
+    status: "live",
+    owner: "Finance",
+    url: "#",
+  },
+  {
+    id: 4,
+    name: "Headcount Planner",
+    description: "Model hiring scenarios, track headcount budget, and manage open roles.",
+    icon: "👥",
+    iconBg: "#f0fdf4",
+    iconBgDark: "#0c1f0f",
+    category: "hr",
+    status: "live",
+    owner: "People Ops",
+    url: "#",
+  },
+  {
+    id: 5,
+    name: "Incident Board",
+    description: "Track active incidents, assign owners, and post status page updates.",
+    icon: "🔥",
+    iconBg: "#fff1f2",
+    iconBgDark: "#2a0a0d",
+    category: "ops",
+    status: "live",
+    owner: "SRE",
+    url: "#",
+  },
+  {
+    id: 6,
+    name: "Campaign Manager",
+    description: "Plan, launch, and measure marketing campaigns across all channels.",
+    icon: "📣",
+    iconBg: "#fdf4ff",
+    iconBgDark: "#1e0a24",
+    category: "marketing",
+    status: "live",
+    owner: "Marketing",
+    url: "#",
+  },
+  {
+    id: 7,
+    name: "Query Lab",
+    description: "Write and share SQL queries against the data warehouse. No ETL needed.",
+    icon: "🔬",
+    iconBg: "#eff6ff",
+    iconBgDark: "#0a1629",
+    category: "devtools",
+    status: "beta",
+    owner: "Data Team",
+    url: "#",
+  },
+  {
+    id: 8,
+    name: "AI Copilot",
+    description: "Internal LLM assistant fine-tuned on your docs, wikis, and runbooks.",
+    icon: "🤖",
+    iconBg: "#f5f3ff",
+    iconBgDark: "#12102a",
+    category: "devtools",
+    status: "beta",
+    owner: "AI Team",
+    url: "#",
+  },
+  {
+    id: 9,
+    name: "Invoice Generator",
+    description: "Auto-generate client invoices from contract data and send via email.",
+    icon: "🧾",
+    iconBg: "#ecfdf5",
+    iconBgDark: "#0a1f16",
+    category: "finance",
+    status: "beta",
+    owner: "Finance",
+    url: "#",
+  },
+  {
+    id: 10,
+    name: "Org Chart Builder",
+    description: "Interactive org chart editor synced with your HRIS in real time.",
+    icon: "🗂️",
+    iconBg: "#fff7ed",
+    iconBgDark: "#231608",
+    category: "hr",
+    status: "internal",
+    owner: "People Ops",
+    url: "#",
+  },
+  {
+    id: 11,
+    name: "Feature Flags",
+    description: "Toggle features per user, segment, or environment without a deploy.",
+    icon: "🚩",
+    iconBg: "#fff1f2",
+    iconBgDark: "#2a0a0d",
+    category: "devtools",
+    status: "internal",
+    owner: "Platform",
+    url: "#",
+  },
+  {
+    id: 12,
+    name: "Content Calendar",
+    description: "Plan, schedule, and review content across blog, social, and email.",
+    icon: "📅",
+    iconBg: "#fdf4ff",
+    iconBgDark: "#1e0a24",
+    category: "marketing",
+    status: "internal",
+    owner: "Marketing",
+    url: "#",
+  },
+];
+
+/* ── State ─────────────────────────────────────────────────── */
+let activeCategory = "all";
+let activeStatus   = "all";
+let searchQuery    = "";
+
+/* ── Helpers ───────────────────────────────────────────────── */
+function isDark() {
+  return document.documentElement.getAttribute("data-theme") === "dark";
+}
+
+function statusLabel(s) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function buildCard(app) {
+  const bg = isDark() ? app.iconBgDark : app.iconBg;
+
+  return `
+    <article class="app-card" data-id="${app.id}">
+      <div class="card-header">
+        <div class="app-icon" style="background:${bg}">${app.icon}</div>
+        <span class="badge badge-${app.status}">${statusLabel(app.status)}</span>
+      </div>
+      <p class="app-name">${escape(app.name)}</p>
+      <p class="app-desc">${escape(app.description)}</p>
+      <div class="card-footer">
+        <span class="app-meta">${escape(app.owner)}</span>
+        <button class="btn-open" onclick="openApp(${app.id})">
+          Open
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="2" y1="6" x2="10" y2="6"/>
+            <polyline points="7,3 10,6 7,9"/>
+          </svg>
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function escape(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/* ── Render ────────────────────────────────────────────────── */
+function render() {
+  const q = searchQuery.trim().toLowerCase();
+
+  const filtered = APPS.filter(app => {
+    const matchCat    = activeCategory === "all" || app.category === activeCategory;
+    const matchStatus = activeStatus === "all"   || app.status   === activeStatus;
+    const matchSearch = !q ||
+      app.name.toLowerCase().includes(q) ||
+      app.description.toLowerCase().includes(q) ||
+      app.owner.toLowerCase().includes(q);
+    return matchCat && matchStatus && matchSearch;
+  });
+
+  const grid  = document.getElementById("appGrid");
+  const empty = document.getElementById("emptyState");
+
+  if (filtered.length === 0) {
+    grid.innerHTML = "";
+    empty.hidden = false;
+  } else {
+    empty.hidden = true;
+    grid.innerHTML = filtered.map(buildCard).join("");
+  }
+
+  // Update page subtitle count
+  document.getElementById("pageSubtitle").textContent =
+    `${filtered.length} app${filtered.length !== 1 ? "s" : ""} available`;
+}
+
+/* ── Category nav ──────────────────────────────────────────── */
+function initCategoryNav() {
+  document.getElementById("categoryList").addEventListener("click", e => {
+    const item = e.target.closest(".nav-item[data-category]");
+    if (!item) return;
+    e.preventDefault();
+
+    const cat = item.dataset.category;
+    if (cat === "recent" || cat === "favorites") {
+      // placeholder — no data yet
+      return;
+    }
+
+    activeCategory = cat;
+
+    document.querySelectorAll(".nav-item[data-category]").forEach(el => {
+      el.classList.toggle("active", el === item);
+    });
+
+    // Update page title
+    const labels = {
+      all: "All Apps", analytics: "Analytics", devtools: "Dev Tools",
+      finance: "Finance", hr: "HR", ops: "Operations", marketing: "Marketing",
+    };
+    document.getElementById("pageTitle").textContent = labels[cat] ?? cat;
+
+    render();
+  });
+}
+
+/* ── Status filter tabs ────────────────────────────────────── */
+function initFilterTabs() {
+  document.querySelectorAll(".filter-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      activeStatus = btn.dataset.status;
+      document.querySelectorAll(".filter-tab").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      render();
+    });
+  });
+}
+
+/* ── Search ────────────────────────────────────────────────── */
+function initSearch() {
+  const input = document.getElementById("searchInput");
+
+  input.addEventListener("input", () => {
+    searchQuery = input.value;
+    render();
+  });
+
+  // ⌘K / Ctrl+K focus shortcut
+  document.addEventListener("keydown", e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      e.preventDefault();
+      input.focus();
+      input.select();
+    }
+    if (e.key === "Escape" && document.activeElement === input) {
+      input.blur();
+    }
+  });
+}
+
+/* ── Dark mode ─────────────────────────────────────────────── */
+function initTheme() {
+  const stored = localStorage.getItem("theme");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const theme = stored ?? (prefersDark ? "dark" : "light");
+  document.documentElement.setAttribute("data-theme", theme);
+
+  document.getElementById("themeToggle").addEventListener("click", () => {
+    const next = isDark() ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    localStorage.setItem("theme", next);
+    // Re-render to swap icon bg colors
+    render();
+  });
+}
+
+/* ── Sidebar toggle ────────────────────────────────────────── */
+function initSidebar() {
+  const sidebar  = document.getElementById("sidebar");
+  const main     = document.getElementById("main");
+  const btn      = document.getElementById("sidebarToggle");
+  const isMobile = () => window.innerWidth <= 900;
+
+  // Create overlay for mobile
+  const overlay = document.createElement("div");
+  overlay.className = "sidebar-overlay";
+  document.body.appendChild(overlay);
+
+  btn.addEventListener("click", () => {
+    if (isMobile()) {
+      sidebar.classList.toggle("mobile-open");
+      overlay.classList.toggle("active");
+    } else {
+      sidebar.classList.toggle("collapsed");
+      main.classList.toggle("sidebar-collapsed");
+    }
+  });
+
+  overlay.addEventListener("click", () => {
+    sidebar.classList.remove("mobile-open");
+    overlay.classList.remove("active");
+  });
+}
+
+/* ── Open App ──────────────────────────────────────────────── */
+function openApp(id) {
+  const app = APPS.find(a => a.id === id);
+  if (!app) return;
+  if (app.url && app.url !== "#") {
+    window.open(app.url, "_blank", "noopener,noreferrer");
+  } else {
+    // Demo feedback
+    const card = document.querySelector(`.app-card[data-id="${id}"]`);
+    if (!card) return;
+    const btn = card.querySelector(".btn-open");
+    const orig = btn.innerHTML;
+    btn.textContent = "Opening…";
+    btn.style.opacity = "0.7";
+    setTimeout(() => {
+      btn.innerHTML = orig;
+      btn.style.opacity = "";
+    }, 1200);
+  }
+}
+
+/* ── Init ──────────────────────────────────────────────────── */
+document.addEventListener("DOMContentLoaded", () => {
+  initTheme();
+  initSidebar();
+  initCategoryNav();
+  initFilterTabs();
+  initSearch();
+  render();
+
+  // Update "All Apps" count badge in sidebar
+  document.getElementById("allCount").textContent = APPS.length;
+});
+
+</script>
+</body>
+</html>
