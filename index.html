@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AppHub — Internal Tools</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ── Top Bar ────────────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="2" y1="4.5" x2="16" y2="4.5"/>
+          <line x1="2" y1="9"   x2="16" y2="9"/>
+          <line x1="2" y1="13.5" x2="16" y2="13.5"/>
+        </svg>
+      </button>
+      <div class="logo">
+        <span class="logo-mark">A</span>
+        <span class="logo-text">AppHub</span>
+      </div>
+    </div>
+
+    <div class="topbar-center">
+      <div class="search-wrap">
+        <svg class="search-icon" width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="6.5" cy="6.5" r="4.5"/>
+          <line x1="10.5" y1="10.5" x2="13.5" y2="13.5"/>
+        </svg>
+        <input
+          type="text"
+          id="searchInput"
+          class="search-input"
+          placeholder="Search apps…"
+          autocomplete="off"
+        />
+        <kbd class="search-kbd">⌘K</kbd>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <button class="icon-btn" id="notifBtn" aria-label="Notifications" title="Notifications">
+        <svg width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8.5 1.5a5 5 0 0 1 5 5v2.5l1.5 2H2L3.5 9V6.5a5 5 0 0 1 5-5z"/>
+          <path d="M7 13.5a1.5 1.5 0 0 0 3 0"/>
+        </svg>
+        <span class="notif-dot"></span>
+      </button>
+
+      <button class="icon-btn theme-btn" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">
+        <svg class="icon-sun" width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="8.5" cy="8.5" r="3"/>
+          <line x1="8.5" y1="1"   x2="8.5" y2="3"/>
+          <line x1="8.5" y1="14"  x2="8.5" y2="16"/>
+          <line x1="1"   y1="8.5" x2="3"   y2="8.5"/>
+          <line x1="14"  y1="8.5" x2="16"  y2="8.5"/>
+          <line x1="3.2" y1="3.2" x2="4.6" y2="4.6"/>
+          <line x1="12.4" y1="12.4" x2="13.8" y2="13.8"/>
+          <line x1="12.4" y1="3.2"  x2="13.8" y2="4.6"/>  <!-- wrong direction, recalc below -->
+          <line x1="3.2"  y1="12.4" x2="4.6"  y2="13.8"/>
+        </svg>
+        <svg class="icon-moon" width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14.5 10.5A7 7 0 0 1 6.5 2.5a7 7 0 1 0 8 8z"/>
+        </svg>
+      </button>
+
+      <div class="user-chip">
+        <div class="avatar" aria-hidden="true">JD</div>
+        <span class="user-name">Jane Doe</span>
+        <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="2,4 5.5,7.5 9,4"/>
+        </svg>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Body Layout ────────────────────────────────────────── -->
+  <div class="layout">
+
+    <!-- Left Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <nav class="sidebar-nav" aria-label="App categories">
+        <p class="nav-label">Categories</p>
+        <ul id="categoryList">
+          <li>
+            <a href="#" class="nav-item active" data-category="all">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="1" y="1" width="5.5" height="5.5" rx="1.2"/>
+                  <rect x="8.5" y="1" width="5.5" height="5.5" rx="1.2"/>
+                  <rect x="1" y="8.5" width="5.5" height="5.5" rx="1.2"/>
+                  <rect x="8.5" y="8.5" width="5.5" height="5.5" rx="1.2"/>
+                </svg>
+              </span>
+              All Apps
+              <span class="nav-count" id="allCount">12</span>
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="analytics">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="1,12 5,7 8.5,9.5 13,3"/>
+                  <polyline points="10,3 13,3 13,6"/>
+                </svg>
+              </span>
+              Analytics
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="devtools">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="4,5 1,7.5 4,10"/>
+                  <polyline points="11,5 14,7.5 11,10"/>
+                  <line x1="9" y1="3" x2="6" y2="12"/>
+                </svg>
+              </span>
+              Dev Tools
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="finance">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="7.5" cy="7.5" r="6"/>
+                  <path d="M7.5 4v1.5m0 4V11m-2-3.5h3.5a1.5 1.5 0 0 0 0-3H7a1.5 1.5 0 0 0 0 3h1.5a1.5 1.5 0 0 1 0 3H5.5"/>
+                </svg>
+              </span>
+              Finance
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="hr">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="7.5" cy="5" r="2.5"/>
+                  <path d="M2 13c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/>
+                </svg>
+              </span>
+              HR
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="ops">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="7.5" cy="7.5" r="2"/>
+                  <path d="M7.5 1.5v1.2M7.5 12.3v1.2M1.5 7.5h1.2M12.3 7.5h1.2M3.2 3.2l.85.85M10.95 10.95l.85.85M10.95 3.2l-.85.85M4.05 10.95l-.85.85"/>
+                </svg>
+              </span>
+              Operations
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="marketing">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2 10.5L12 3l-2 10-4-3-4 3z"/>
+                  <line x1="10" y1="3" x2="6" y2="10.5"/>
+                </svg>
+              </span>
+              Marketing
+            </a>
+          </li>
+        </ul>
+
+        <div class="sidebar-divider"></div>
+
+        <p class="nav-label">Quick Links</p>
+        <ul>
+          <li>
+            <a href="#" class="nav-item" data-category="recent">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="7.5" cy="7.5" r="6"/>
+                  <polyline points="7.5,4 7.5,7.5 9.5,9.5"/>
+                </svg>
+              </span>
+              Recently Opened
+            </a>
+          </li>
+          <li>
+            <a href="#" class="nav-item" data-category="favorites">
+              <span class="nav-icon">
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="7.5,1.5 9.2,5.7 13.8,6.1 10.4,9 11.5,13.5 7.5,11 3.5,13.5 4.6,9 1.2,6.1 5.8,5.7"/>
+                </svg>
+              </span>
+              Favorites
+            </a>
+          </li>
+        </ul>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main" id="main">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title" id="pageTitle">All Apps</h1>
+          <p class="page-subtitle" id="pageSubtitle">12 apps available</p>
+        </div>
+        <div class="header-actions">
+          <div class="filter-tabs">
+            <button class="filter-tab active" data-status="all">All</button>
+            <button class="filter-tab" data-status="live">Live</button>
+            <button class="filter-tab" data-status="beta">Beta</button>
+            <button class="filter-tab" data-status="internal">Internal</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="app-grid" id="appGrid">
+        <!-- Cards injected by app.js -->
+      </div>
+
+      <div class="empty-state" id="emptyState" hidden>
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity=".35">
+          <circle cx="18" cy="18" r="12"/>
+          <line x1="28" y1="28" x2="37" y2="37"/>
+        </svg>
+        <p>No apps match your search.</p>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
