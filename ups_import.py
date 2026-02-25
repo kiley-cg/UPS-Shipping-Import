@@ -455,6 +455,7 @@ async def process_file(filepath: str) -> dict:
             print(f"      ✓ Job Log added")
             result["logs_added"] += 1
         except httpx.HTTPStatusError as exc:
+            detail = exc.response.text[:300].strip()
             if exc.response.status_code == 404:
                 msg = f"Job #{job_id} (PO {po_number}) not found in Syncore — manual entry required"
             else:
@@ -463,7 +464,9 @@ async def process_file(filepath: str) -> dict:
                     f"HTTP {exc.response.status_code}"
                 )
             print(f"      ✗ {msg}")
-            result["errors"].append(msg)
+            if detail:
+                print(f"        Syncore says: {detail}")
+            result["errors"].append(f"{msg} | API response: {detail}")
         except Exception as exc:
             msg = f"Unexpected error for Job #{job_id} (PO {po_number}): {exc}"
             print(f"      ✗ {msg}")
