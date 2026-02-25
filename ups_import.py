@@ -171,6 +171,20 @@ def _headers() -> dict:
     }
 
 
+async def probe_logs_endpoint(job_id: int) -> None:
+    """GET the logs endpoint once to diagnose if it exists.
+
+    Prints a single diagnostic line and returns — does not raise.
+    """
+    url = f"{API_BASE}/orders/jobs/{job_id}/logs"
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            resp = await client.get(url, headers=_headers())
+        print(f"  [Diagnostic] GET {url} → HTTP {resp.status_code}: {resp.text[:200].strip()}")
+    except Exception as exc:
+        print(f"  [Diagnostic] GET {url} → error: {exc}")
+
+
 async def add_job_log(job_id: int, description: str) -> dict:
     """POST a Job Log entry to a Syncore job."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
@@ -437,6 +451,11 @@ async def process_file(filepath: str) -> dict:
         skipped = [r["tracking"] for r in no_po]
         print(f"    Skipped (no PO#): {len(skipped)}")
         result["skipped_no_po"] = skipped
+
+    # Probe the logs endpoint once with the first real job ID to diagnose 404s.
+    first_group = next(iter(sorted(groups.items())), None)
+    if first_group:
+        await probe_logs_endpoint(first_group[1]["job_id"])
 
     for po_number, group in sorted(groups.items()):
         job_id = group["job_id"]
