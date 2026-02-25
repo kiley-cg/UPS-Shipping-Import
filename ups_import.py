@@ -2,29 +2,33 @@
 """
 UPS Tracking Import
 -------------------
-Reads today's UPS Excel files from Google Drive, groups shipments by Syncore
-PO number, and adds a Job Log entry to each job in Syncore.
+Reads today's UPS Excel files from Google Drive (via the Drive API),
+groups shipments by Syncore PO number, and adds a Job Log entry to each
+job in Syncore.
+
+Runs as a scheduled GitHub Actions workflow — no local machine required.
 
 Setup:
     pip install -r requirements.txt
-    cp .env.example .env        # fill in your values
-    python ups_import.py
+    # Set GitHub Actions secrets (see README for the full list)
+    # Trigger manually: Actions tab → UPS Tracking Import → Run workflow
 
-Schedule (macOS launchd or cron):
-    # Run daily at 8 AM:
-    # 0 8 * * * cd /path/to/project && python ups_import.py >> ups_import.log 2>&1
+Local testing:
+    cp .env.example .env   # fill in all values including GOOGLE_* vars
+    python ups_import.py
 """
 
 import asyncio
 import glob
+import io
 import json
 import os
 import re
 import smtplib
+import tempfile
 from datetime import date, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from pathlib import Path
 
 import httpx
 
@@ -32,17 +36,22 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  # python-dotenv optional; can set env vars manually
+    pass  # python-dotenv optional; env vars can be set directly
 
 # ---------------------------------------------------------------------------
-# Configuration (all overridable via environment variables / .env file)
+# Configuration
 # ---------------------------------------------------------------------------
 SYNCORE_API_KEY = os.environ.get("SYNCORE_API_KEY", "")
 GMAIL_USER = os.environ.get("GMAIL_USER", "")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 CSR_EMAIL = os.environ.get("CSR_EMAIL", "")
 
-UPS_DRIVE_PATH = os.environ.get(
+# Google Drive — set via GitHub Actions secrets or .env
+GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+GOOGLE_DRIVE_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "")
+
+# Local fallback path (only used when GOOGLE_SERVICE_ACCOUNT_JSON is not set)
+LOCAL_UPS_PATH = os.environ.get(
     "UPS_DRIVE_PATH",
     "/Users/kileygustafson/Library/CloudStorage/"
     "GoogleDrive-kiley@colorgraphicswa.com/Shared drives/UPS Shipping Info",
@@ -53,6 +62,101 @@ HTTP_TIMEOUT = 30
 
 # Regex: Syncore PO number  e.g. "31987-1", "32073-2"
 PO_PATTERN = re.compile(r"^\d{5,6}-\d+$")
+
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+
+
+# ---------------------------------------------------------------------------
+# Google Drive file download
+# ---------------------------------------------------------------------------
+
+def _drive_service():
+    """Build and return an authenticated Google Drive API service object."""
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+
+    creds_info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+    creds = service_account.Credentials.from_service_account_info(
+        creds_info, scopes=DRIVE_SCOPES
+    )
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+def download_todays_files(tmp_dir: str) -> list[str]:
+    """
+    Download today's UPS Excel files from Google Drive to tmp_dir.
+    Returns a list of local file paths.
+
+    Falls back to the local filesystem path if GOOGLE_SERVICE_ACCOUNT_JSON
+    is not set (useful for local testing with Google Drive synced to disk).
+    """
+    date_prefix = date.today().strftime("%Y%m%d")  # e.g. 20260225
+
+    # ── Local fallback ────────────────────────────────────────────────────
+    if not GOOGLE_SERVICE_ACCOUNT_JSON:
+        print(f"  [Drive API not configured — using local path: {LOCAL_UPS_PATH}]")
+        files: list[str] = []
+        for ext in ("xlsx", "xls", "XLSX", "XLS"):
+            files.extend(glob.glob(os.path.join(LOCAL_UPS_PATH, f"{date_prefix}*.{ext}")))
+        # Deduplicate
+        seen: set[str] = set()
+        return [f for f in files if not (f in seen or seen.add(f))]  # type: ignore[func-returns-value]
+
+    # ── Google Drive API ──────────────────────────────────────────────────
+    if not GOOGLE_DRIVE_FOLDER_ID:
+        raise RuntimeError(
+            "GOOGLE_DRIVE_FOLDER_ID is not set. "
+            "Add it as a GitHub Actions secret or to your .env file."
+        )
+
+    from googleapiclient.http import MediaIoBaseDownload
+
+    service = _drive_service()
+
+    query = (
+        f"'{GOOGLE_DRIVE_FOLDER_ID}' in parents"
+        f" and name contains '{date_prefix}'"
+        f" and mimeType != 'application/vnd.google-apps.folder'"
+        f" and trashed = false"
+    )
+
+    response = (
+        service.files()
+        .list(
+            q=query,
+            fields="files(id, name)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        )
+        .execute()
+    )
+
+    drive_files = response.get("files", [])
+    excel_files = [
+        f for f in drive_files if f["name"].lower().endswith((".xlsx", ".xls"))
+    ]
+
+    if not excel_files:
+        return []
+
+    downloaded: list[str] = []
+    for file_info in excel_files:
+        dest_path = os.path.join(tmp_dir, file_info["name"])
+        request = service.files().get_media(
+            fileId=file_info["id"],
+            supportsAllDrives=True,
+        )
+        buffer = io.BytesIO()
+        downloader = MediaIoBaseDownload(buffer, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        with open(dest_path, "wb") as fh:
+            fh.write(buffer.getvalue())
+        print(f"  Downloaded: {file_info['name']}")
+        downloaded.append(dest_path)
+
+    return downloaded
 
 
 # ---------------------------------------------------------------------------
@@ -79,91 +183,15 @@ async def add_job_log(job_id: int, description: str) -> dict:
         return resp.json()
 
 
-async def job_exists(job_id: int) -> bool:
-    """Return True if the job ID is found in Syncore (searches last 13 months)."""
-    today = date.today()
-    date_from = (today - timedelta(days=395)).isoformat()
-    date_to = today.isoformat()
-
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        # Try a direct lookup first (faster if the API supports it)
-        try:
-            resp = await client.get(
-                f"{API_BASE}/orders/jobs/{job_id}",
-                headers=_headers(),
-            )
-            if resp.status_code == 200:
-                return True
-        except httpx.HTTPStatusError:
-            pass
-
-        # Fall back: search by date range and look for matching ID
-        for job_class in ("Dropship", "Store", "Corporate"):
-            try:
-                resp = await client.get(
-                    f"{API_BASE}/orders/jobs",
-                    headers=_headers(),
-                    params={
-                        "date_from": date_from,
-                        "date_to": date_to,
-                        "job_class": job_class,
-                        "count": 25,
-                        "page": 1,
-                    },
-                )
-                if resp.status_code == 200:
-                    jobs = resp.json().get("jobs", [])
-                    if any(j.get("id") == job_id for j in jobs):
-                        return True
-            except Exception:
-                pass
-
-    return False
-
-
-# ---------------------------------------------------------------------------
-# File discovery
-# ---------------------------------------------------------------------------
-
-def find_todays_files() -> list[str]:
-    """
-    Return Excel files in UPS_DRIVE_PATH whose name starts with today's date.
-    Tries YYYYMMDD format (e.g. 20260225_UPS_Report.xlsx).
-    """
-    today = date.today()
-    date_prefix = today.strftime("%Y%m%d")  # 20260225
-
-    files: list[str] = []
-    for ext in ("*.xlsx", "*.xls", "*.XLSX", "*.XLS"):
-        files.extend(glob.glob(os.path.join(UPS_DRIVE_PATH, f"{date_prefix}*{ext[1:]}")))
-        files.extend(glob.glob(os.path.join(UPS_DRIVE_PATH, ext)))  # also grab any *.xlsx as fallback
-
-    # Deduplicate while preserving order
-    seen: set[str] = set()
-    unique: list[str] = []
-    for f in files:
-        if f not in seen:
-            seen.add(f)
-            unique.append(f)
-
-    # Filter: only files whose basename starts with today's date prefix
-    todays = [f for f in unique if os.path.basename(f).startswith(date_prefix)]
-    return todays
-
-
-def is_suboutcorex(filepath: str) -> bool:
-    return "suboutcorex" in os.path.basename(filepath).lower()
-
-
 # ---------------------------------------------------------------------------
 # Excel parsing
 # ---------------------------------------------------------------------------
 
 def _extract_po(ref1, ref2) -> str | None:
-    """Return the first value that matches the Syncore PO pattern, or None."""
+    """Return the first value matching the Syncore PO pattern, or None."""
     for raw in (ref1, ref2):
         val = str(raw or "").strip()
-        # Handle Excel scientific notation floats  e.g. 14752000000.0 → skip
+        # Skip Excel scientific notation floats (e.g. "1.4752e+10")
         if PO_PATTERN.match(val):
             return val
     return None
@@ -179,14 +207,11 @@ def parse_ups_file(filepath: str) -> list[dict]:
     try:
         import openpyxl
     except ImportError:
-        raise RuntimeError(
-            "openpyxl is required. Run: pip install openpyxl"
-        )
+        raise RuntimeError("openpyxl is required. Run: pip install openpyxl")
 
     wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
     ws = wb.active
 
-    # Locate header row and column positions
     col_tracking = col_neg_charge = col_ref1 = col_ref2 = None
     header_row_idx = None
 
@@ -223,7 +248,7 @@ def parse_ups_file(filepath: str) -> list[dict]:
     for row in ws.iter_rows(min_row=header_row_idx + 1, values_only=True):
         tracking = str(row[col_tracking] or "").strip()
         if not tracking.startswith("1Z"):
-            continue  # Skip blank rows or non-UPS rows
+            continue
 
         try:
             ups_cost = float(row[col_neg_charge] or 0)
@@ -231,14 +256,7 @@ def parse_ups_file(filepath: str) -> list[dict]:
             ups_cost = 0.0
 
         po_number = _extract_po(row[col_ref1], row[col_ref2])
-
-        rows.append(
-            {
-                "tracking": tracking,
-                "ups_cost": ups_cost,
-                "po_number": po_number,
-            }
-        )
+        rows.append({"tracking": tracking, "ups_cost": ups_cost, "po_number": po_number})
 
     wb.close()
     return rows
@@ -249,8 +267,8 @@ def group_by_po(rows: list[dict]) -> tuple[dict, list[dict]]:
     Group rows by PO number.
 
     Returns:
-        groups   – {po_number: {po_number, job_id, tracking_numbers, total_cost}}
-        no_po    – rows where no PO number was found
+        groups  – {po_number: {po_number, job_id, tracking_numbers, total_cost}}
+        no_po   – rows where no Syncore PO number was found
     """
     groups: dict[str, dict] = {}
     no_po: list[dict] = []
@@ -300,9 +318,9 @@ def build_log_entry(po_number: str, tracking_numbers: list[str], total_cost: flo
 # ---------------------------------------------------------------------------
 
 def send_email(subject: str, body: str) -> None:
-    """Send a plain-text email via Gmail SMTP."""
+    """Send a plain-text notification email via Gmail SMTP."""
     if not all([GMAIL_USER, GMAIL_APP_PASSWORD, CSR_EMAIL]):
-        print(f"[EMAIL NOT CONFIGURED — printing instead]\nSubject: {subject}\n{body}\n")
+        print(f"[EMAIL NOT CONFIGURED]\nSubject: {subject}\n{body}\n")
         return
 
     msg = MIMEMultipart("alternative")
@@ -328,13 +346,12 @@ async def process_file(filepath: str) -> dict:
     """
     Parse one UPS Excel file and write Job Log entries to Syncore.
 
-    Returns a summary dict with keys:
-        file, logs_added, errors, skipped_no_po
+    Returns a summary dict: {file, logs_added, errors, skipped_no_po}
     """
     filename = os.path.basename(filepath)
     print(f"\n  [{filename}]")
 
-    result = {
+    result: dict = {
         "file": filename,
         "logs_added": 0,
         "errors": [],
@@ -399,50 +416,56 @@ async def main() -> None:
     print(f"{'='*55}")
     print(f"  UPS Tracking Import  —  {today_str}")
     print(f"{'='*55}")
-    print(f"  Drive path : {UPS_DRIVE_PATH}")
 
-    # Validate required config
     if not SYNCORE_API_KEY:
-        print("\nERROR: SYNCORE_API_KEY is not set. Check your .env file.")
+        print("\nERROR: SYNCORE_API_KEY is not set.")
         return
 
-    # Find today's files
-    all_files = find_todays_files()
-    if not all_files:
-        print(f"\n  No UPS files found for {date.today().strftime('%Y%m%d')}. Nothing to do.")
-        return
+    # Download today's files to a temp directory
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        try:
+            all_files = download_todays_files(tmp_dir)
+        except Exception as exc:
+            print(f"\nERROR downloading files from Google Drive: {exc}")
+            send_email(
+                subject=f"UPS Import Failed — Drive Error ({today_str})",
+                body=f"The UPS import could not download files from Google Drive:\n\n{exc}",
+            )
+            return
 
-    print(f"  Files found : {len(all_files)}\n")
+        if not all_files:
+            print(f"\n  No UPS files found for {date.today().strftime('%Y%m%d')}. Nothing to do.")
+            return
 
-    # Split suboutcorex files from processable ones
-    suboutcorex = [f for f in all_files if is_suboutcorex(f)]
-    processable = [f for f in all_files if not is_suboutcorex(f)]
+        print(f"  Files found: {len(all_files)}\n")
 
-    # Notify CSRs about suboutcorex files
-    if suboutcorex:
-        names = [os.path.basename(f) for f in suboutcorex]
-        print(f"  [NOTICE] Skipping {len(suboutcorex)} suboutcorex file(s): {', '.join(names)}")
-        send_email(
-            subject=f"UPS Import — Manual Review Required ({today_str})",
-            body=(
-                f"The following UPS file(s) contain 'suboutcorex' in the filename "
-                f"and were NOT automatically imported. Please review them manually:\n\n"
-                + "\n".join(f"  • {n}" for n in names)
-                + f"\n\nLocation:\n  {UPS_DRIVE_PATH}"
-            ),
-        )
+        # Split out suboutcorex files
+        suboutcorex = [f for f in all_files if "suboutcorex" in os.path.basename(f).lower()]
+        processable = [f for f in all_files if "suboutcorex" not in os.path.basename(f).lower()]
 
-    if not processable:
-        print("  No processable files remaining.")
-        return
+        if suboutcorex:
+            names = [os.path.basename(f) for f in suboutcorex]
+            print(f"  [NOTICE] Skipping {len(suboutcorex)} suboutcorex file(s): {', '.join(names)}")
+            send_email(
+                subject=f"UPS Import — Manual Review Required ({today_str})",
+                body=(
+                    f"The following UPS file(s) contain 'suboutcorex' in the filename "
+                    f"and were NOT automatically imported. Please review them manually:\n\n"
+                    + "\n".join(f"  • {n}" for n in names)
+                ),
+            )
 
-    # Process each file
-    all_results = []
-    for filepath in processable:
-        result = await process_file(filepath)
-        all_results.append(result)
+        if not processable:
+            print("  No processable files remaining.")
+            return
 
-    # Aggregate results
+        all_results = []
+        for filepath in processable:
+            result = await process_file(filepath)
+            all_results.append(result)
+
+    # Temp directory is cleaned up here automatically
+
     total_logs = sum(r["logs_added"] for r in all_results)
     all_errors = [err for r in all_results for err in r["errors"]]
 
@@ -451,7 +474,6 @@ async def main() -> None:
     print(f"  Errors         : {len(all_errors)}")
     print(f"{'='*55}\n")
 
-    # Email CSRs if any errors require manual entry
     if all_errors:
         send_email(
             subject=f"UPS Import Errors — Manual Entry Required ({today_str})",
