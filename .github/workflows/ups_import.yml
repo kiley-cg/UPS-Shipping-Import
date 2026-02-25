@@ -1,0 +1,37 @@
+name: UPS Tracking Import
+
+on:
+  schedule:
+    # Runs weekdays at 2 PM UTC = 6 AM PST / 3 AM EST
+    # Adjust the hour if UPS files arrive at a different time.
+    - cron: '0 6 * * 1-5'
+  workflow_dispatch:   # Allows a manual run from the GitHub Actions tab
+
+jobs:
+  import:
+    name: Import UPS tracking into Syncore
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run UPS tracking import
+        env:
+          SYNCORE_API_KEY:              ${{ secrets.SYNCORE_API_KEY }}
+          GMAIL_USER:                   ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD:           ${{ secrets.GMAIL_APP_PASSWORD }}
+          CSR_EMAIL:                    ${{ secrets.CSR_EMAIL }}
+          GOOGLE_SERVICE_ACCOUNT_JSON:  ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_DRIVE_FOLDER_ID:       ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+        run: python ups_import.py
