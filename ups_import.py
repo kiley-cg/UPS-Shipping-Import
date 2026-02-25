@@ -96,7 +96,7 @@ def download_todays_files(tmp_dir: str) -> list[str]:
     if not GOOGLE_SERVICE_ACCOUNT_JSON:
         print(f"  [Drive API not configured — using local path: {LOCAL_UPS_PATH}]")
         files: list[str] = []
-        for ext in ("xlsx", "xls", "XLSX", "XLS"):
+        for ext in ("xlsx", "xls", "XLSX", "XLS", "csv", "CSV"):
             files.extend(glob.glob(os.path.join(LOCAL_UPS_PATH, f"{date_prefix}*.{ext}")))
         # Deduplicate
         seen: set[str] = set()
@@ -133,7 +133,7 @@ def download_todays_files(tmp_dir: str) -> list[str]:
 
     drive_files = response.get("files", [])
     excel_files = [
-        f for f in drive_files if f["name"].lower().endswith((".xlsx", ".xls"))
+        f for f in drive_files if f["name"].lower().endswith((".xlsx", ".xls", ".csv"))
     ]
 
     if not excel_files:
@@ -197,13 +197,78 @@ def _extract_po(ref1, ref2) -> str | None:
     return None
 
 
+def _parse_csv_file(filepath: str) -> list[dict]:
+    """Parse a UPS CSV file. Returns same format as the Excel parser."""
+    import csv
+
+    col_tracking = col_neg_charge = col_ref1 = col_ref2 = None
+
+    with open(filepath, newline="", encoding="utf-8-sig") as fh:
+        reader = csv.reader(fh)
+        rows_raw = list(reader)
+
+    # Find header row
+    header_row_idx = None
+    for i, row in enumerate(rows_raw):
+        normalized = [str(c or "").strip().lower() for c in row]
+        if "tracking number" in normalized:
+            header_row_idx = i
+            col_tracking = normalized.index("tracking number")
+            if "neg total charge" in normalized:
+                col_neg_charge = normalized.index("neg total charge")
+            if "package reference number value 1" in normalized:
+                col_ref1 = normalized.index("package reference number value 1")
+            if "package reference number value 2" in normalized:
+                col_ref2 = normalized.index("package reference number value 2")
+            break
+
+    if header_row_idx is None:
+        raise ValueError(f"Header row not found in {os.path.basename(filepath)}")
+
+    missing = [
+        name
+        for name, idx in [
+            ("Tracking Number", col_tracking),
+            ("Neg Total Charge", col_neg_charge),
+            ("Package Reference Number Value 1", col_ref1),
+            ("Package Reference Number Value 2", col_ref2),
+        ]
+        if idx is None
+    ]
+    if missing:
+        raise ValueError(f"Missing columns in {os.path.basename(filepath)}: {missing}")
+
+    rows: list[dict] = []
+    for row in rows_raw[header_row_idx + 1:]:
+        if len(row) <= col_tracking:
+            continue
+        tracking = str(row[col_tracking] or "").strip()
+        if not tracking.startswith("1Z"):
+            continue
+
+        try:
+            ups_cost = float(row[col_neg_charge] or 0)
+        except (TypeError, ValueError, IndexError):
+            ups_cost = 0.0
+
+        ref1 = row[col_ref1] if col_ref1 < len(row) else None
+        ref2 = row[col_ref2] if col_ref2 < len(row) else None
+        po_number = _extract_po(ref1, ref2)
+        rows.append({"tracking": tracking, "ups_cost": ups_cost, "po_number": po_number})
+
+    return rows
+
+
 def parse_ups_file(filepath: str) -> list[dict]:
     """
-    Parse a UPS Excel file.  Returns a list of dicts with keys:
+    Parse a UPS Excel or CSV file.  Returns a list of dicts with keys:
         tracking  – UPS tracking number (starts with 1Z)
         ups_cost  – Neg Total Charge (float)
         po_number – Syncore PO number e.g. "31987-1" (str or None)
     """
+    if filepath.lower().endswith(".csv"):
+        return _parse_csv_file(filepath)
+
     try:
         import openpyxl
     except ImportError:
