@@ -2,9 +2,9 @@ name: UPS Tracking Import
 
 on:
   schedule:
-    # Runs weekdays at 2 PM UTC = 6 AM PST / 9 AM EST
+    # Runs every day at 2 PM UTC = 6 AM PST / 9 AM EST
     # Adjust the hour if UPS files arrive at a different time.
-    - cron: '0 14 * * 1-5'
+    - cron: '0 14 * * *'
   workflow_dispatch:   # Allows a manual run from the GitHub Actions tab
 
 jobs:
