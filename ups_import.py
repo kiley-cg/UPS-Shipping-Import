@@ -199,8 +199,14 @@ async def syncore_login(client: httpx.AsyncClient) -> bool:
         },
     )
 
-    if "/Account/Login" in str(resp.url):
+    final_url = str(resp.url)
+    if "/Account/Login" in final_url:
         print("  [Syncore] Login failed — check SYNCORE_USERNAME / SYNCORE_PASSWORD")
+        return False
+    if any(seg in final_url for seg in ("/Account/Two", "/Account/MFA", "/Account/Send", "/Account/Verify")):
+        print(
+            "  [Syncore] Login blocked by MFA — use a service account with MFA disabled"
+        )
         return False
 
     print("  [Syncore] Logged in successfully")
@@ -217,6 +223,11 @@ async def add_tracker_entry(
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
     resp.raise_for_status()
+    content_type = resp.headers.get("content-type", "")
+    if "text/html" in content_type:
+        raise RuntimeError(
+            "Syncore returned HTML instead of JSON — session may have expired or MFA is required"
+        )
 
 
 # ---------------------------------------------------------------------------
