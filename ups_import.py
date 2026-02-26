@@ -240,6 +240,9 @@ def _extract_po(ref1, ref2) -> str | None:
     """Return the first value matching the Syncore PO pattern, or None."""
     for raw in (ref1, ref2):
         val = str(raw or "").strip()
+        # Strip common "PO " prefix (e.g. "PO 31987-1" → "31987-1")
+        if val.upper().startswith("PO "):
+            val = val[3:].strip()
         # Skip Excel scientific notation floats (e.g. "1.4752e+10")
         if PO_PATTERN.match(val):
             return val
@@ -250,7 +253,7 @@ def _parse_csv_file(filepath: str) -> list[dict]:
     """Parse a UPS CSV file. Returns same format as the Excel parser."""
     import csv
 
-    col_tracking = col_neg_charge = col_ref1 = col_ref2 = None
+    col_tracking = col_neg_charge = col_ref1 = col_ref2 = col_shipper = None
 
     with open(filepath, newline="", encoding="utf-8-sig") as fh:
         reader = csv.reader(fh)
@@ -269,6 +272,8 @@ def _parse_csv_file(filepath: str) -> list[dict]:
                 col_ref1 = normalized.index("package reference number value 1")
             if "package reference number value 2" in normalized:
                 col_ref2 = normalized.index("package reference number value 2")
+            if "shipper name" in normalized:
+                col_shipper = normalized.index("shipper name")
             break
 
     if header_row_idx is None:
@@ -303,7 +308,8 @@ def _parse_csv_file(filepath: str) -> list[dict]:
         ref1 = row[col_ref1] if col_ref1 < len(row) else None
         ref2 = row[col_ref2] if col_ref2 < len(row) else None
         po_number = _extract_po(ref1, ref2)
-        rows.append({"tracking": tracking, "ups_cost": ups_cost, "po_number": po_number})
+        shipper = str(row[col_shipper] or "").strip() if col_shipper is not None and col_shipper < len(row) else ""
+        rows.append({"tracking": tracking, "ups_cost": ups_cost, "po_number": po_number, "shipper": shipper})
 
     return rows
 
@@ -326,7 +332,7 @@ def parse_ups_file(filepath: str) -> list[dict]:
     wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
     ws = wb.active
 
-    col_tracking = col_neg_charge = col_ref1 = col_ref2 = None
+    col_tracking = col_neg_charge = col_ref1 = col_ref2 = col_shipper = None
     header_row_idx = None
 
     for row_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
@@ -340,6 +346,8 @@ def parse_ups_file(filepath: str) -> list[dict]:
                 col_ref1 = normalized.index("package reference number value 1")
             if "package reference number value 2" in normalized:
                 col_ref2 = normalized.index("package reference number value 2")
+            if "shipper name" in normalized:
+                col_shipper = normalized.index("shipper name")
             break
 
     if header_row_idx is None:
@@ -370,7 +378,8 @@ def parse_ups_file(filepath: str) -> list[dict]:
             ups_cost = 0.0
 
         po_number = _extract_po(row[col_ref1], row[col_ref2])
-        rows.append({"tracking": tracking, "ups_cost": ups_cost, "po_number": po_number})
+        shipper = str(row[col_shipper] or "").strip() if col_shipper is not None else ""
+        rows.append({"tracking": tracking, "ups_cost": ups_cost, "po_number": po_number, "shipper": shipper})
 
     wb.close()
     return rows
@@ -485,9 +494,8 @@ async def process_file(filepath: str, client: httpx.AsyncClient) -> dict:
     groups, no_po = group_by_po(rows)
 
     if no_po:
-        skipped = [r["tracking"] for r in no_po]
-        print(f"    Skipped (no PO#): {len(skipped)}")
-        result["skipped_no_po"] = skipped
+        print(f"    Skipped (no PO#): {len(no_po)}")
+        result["skipped_no_po"] = no_po
 
     for po_number, group in sorted(groups.items()):
         job_id = group["job_id"]
@@ -541,7 +549,7 @@ def _build_run_summary(
     files_processed: list[str],
     added: list[dict],
     manual: list[dict],
-    skipped_no_po: list[str],
+    skipped_no_po: list[dict],
     suboutcorex_names: list[str],
     errors: list[str],
 ) -> str:
@@ -583,7 +591,12 @@ def _build_run_summary(
     if skipped_no_po:
         lines.append(f"⚠ SKIPPED — NO PO NUMBER FOUND ({len(skipped_no_po)} tracking {'number' if len(skipped_no_po) == 1 else 'numbers'})")
         lines.append(sep)
-        lines.extend(f"  {t}" for t in skipped_no_po)
+        for row in skipped_no_po:
+            shipper_label = f"  Shipper: {row['shipper']}" if row.get("shipper") else ""
+            lines.append(
+                f"  {row['tracking']}  |  ${row['ups_cost']:.2f}"
+                + (f"\n{shipper_label}" if shipper_label else "")
+            )
         lines.append("")
 
     # ── Suboutcorex files ─────────────────────────────────────────────────
