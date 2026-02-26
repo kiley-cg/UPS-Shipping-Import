@@ -26,7 +26,8 @@ import os
 import re
 import smtplib
 import tempfile
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone, datetime
+from zoneinfo import ZoneInfo
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -92,7 +93,7 @@ def download_todays_files(tmp_dir: str) -> list[str]:
     Falls back to the local filesystem path if GOOGLE_SERVICE_ACCOUNT_JSON
     is not set (useful for local testing with Google Drive synced to disk).
     """
-    date_prefix = date.today().strftime("%Y%m%d")  # e.g. 20260225
+    date_prefix = datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%Y%m%d")  # e.g. 20260225
 
     # ── Local fallback ────────────────────────────────────────────────────
     if not GOOGLE_SERVICE_ACCOUNT_JSON:
