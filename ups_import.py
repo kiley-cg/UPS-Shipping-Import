@@ -190,6 +190,10 @@ async def syncore_login(client: httpx.AsyncClient) -> bool:
         print("  [Syncore] Could not find CSRF token on login page")
         return False
 
+    # Debug: print all input field names on the login form
+    input_names = re.findall(r'<input[^>]+name="([^"]+)"', resp.text)
+    print(f"  [Syncore] Login form fields: {input_names}")
+
     resp = await client.post(
         login_url,
         data={
