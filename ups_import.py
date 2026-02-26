@@ -41,7 +41,10 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-SYNCORE_API_KEY = os.environ.get("SYNCORE_API_KEY", "")
+SYNCORE_USERNAME = os.environ.get("SYNCORE_USERNAME", "")
+SYNCORE_PASSWORD = os.environ.get("SYNCORE_PASSWORD", "")
+SYNCORE_WEB_BASE = "https://www.ateasesystems.net"
+
 GMAIL_USER = os.environ.get("GMAIL_USER", "")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 CSR_EMAIL = os.environ.get("CSR_EMAIL", "")
@@ -57,7 +60,6 @@ LOCAL_UPS_PATH = os.environ.get(
     "GoogleDrive-kiley@colorgraphicswa.com/Shared drives/UPS Shipping Info",
 )
 
-API_BASE = "https://api.syncore.app/v2"
 HTTP_TIMEOUT = 30
 
 # Regex: Syncore PO number  e.g. "31987-1", "32073-2"
@@ -160,27 +162,72 @@ def download_todays_files(tmp_dir: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Syncore API helpers
+# Syncore web session helpers
 # ---------------------------------------------------------------------------
 
-def _headers() -> dict:
-    return {
-        "x-api-key": SYNCORE_API_KEY,
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
+async def syncore_login(client: httpx.AsyncClient) -> bool:
+    """Log in to Syncore and store session cookies in client.
 
-
-async def add_job_log(job_id: int, description: str) -> dict:
-    """POST a Job Log entry to a Syncore job."""
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        resp = await client.post(
-            f"{API_BASE}/orders/jobs/{job_id}/logs",
-            headers=_headers(),
-            json={"description": description},
-        )
+    Returns True on success, False on failure.
+    """
+    login_url = f"{SYNCORE_WEB_BASE}/Account/Login"
+    try:
+        resp = await client.get(login_url)
         resp.raise_for_status()
-        return resp.json()
+    except Exception as exc:
+        print(f"  [Syncore] Could not reach login page: {exc}")
+        return False
+
+    # Extract the anti-forgery token embedded in the login form
+    match = re.search(
+        r'<input[^>]+name="__RequestVerificationToken"[^>]+value="([^"]+)"',
+        resp.text,
+    ) or re.search(
+        r'name="__RequestVerificationToken"\s+type="hidden"\s+value="([^"]+)"',
+        resp.text,
+    )
+    if not match:
+        print("  [Syncore] Could not find CSRF token on login page")
+        return False
+
+    resp = await client.post(
+        login_url,
+        data={
+            "UserName": SYNCORE_USERNAME,
+            "Password": SYNCORE_PASSWORD,
+            "__RequestVerificationToken": match.group(1),
+        },
+    )
+
+    final_url = str(resp.url)
+    if "/Account/Login" in final_url:
+        print("  [Syncore] Login failed — check SYNCORE_USERNAME / SYNCORE_PASSWORD")
+        return False
+    if any(seg in final_url for seg in ("/Account/Two", "/Account/MFA", "/Account/Send", "/Account/Verify")):
+        print(
+            "  [Syncore] Login blocked by MFA — use a service account with MFA disabled"
+        )
+        return False
+
+    print("  [Syncore] Logged in successfully")
+    return True
+
+
+async def add_tracker_entry(
+    client: httpx.AsyncClient, job_id: int, description: str
+) -> None:
+    """POST a tracker entry to a Syncore job via the web UI endpoint."""
+    resp = await client.post(
+        f"{SYNCORE_WEB_BASE}/Job/AddTrackerEntryAsync",
+        data={"JobId": job_id, "TextColor": 1, "Description": description},
+        headers={"X-Requested-With": "XMLHttpRequest"},
+    )
+    resp.raise_for_status()
+    content_type = resp.headers.get("content-type", "")
+    if "text/html" in content_type:
+        raise RuntimeError(
+            "Syncore returned HTML instead of JSON — session may have expired or MFA is required"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -407,11 +454,11 @@ def send_email(subject: str, body: str) -> None:
 # Per-file processing
 # ---------------------------------------------------------------------------
 
-async def process_file(filepath: str) -> dict:
+async def process_file(filepath: str, client: httpx.AsyncClient) -> dict:
     """
-    Parse one UPS Excel file and write Job Log entries to Syncore.
+    Parse one UPS Excel file and write tracker entries to Syncore.
 
-    Returns a summary dict: {file, logs_added, errors, skipped_no_po}
+    Returns a summary dict: {file, logs_added, manual_entries, errors, skipped_no_po}
     """
     filename = os.path.basename(filepath)
     print(f"\n  [{filename}]")
@@ -419,6 +466,7 @@ async def process_file(filepath: str) -> dict:
     result: dict = {
         "file": filename,
         "logs_added": 0,
+        "manual_entries": [],  # jobs the CSR must add to Syncore manually
         "errors": [],
         "skipped_no_po": [],
     }
@@ -451,19 +499,22 @@ async def process_file(filepath: str) -> dict:
         log_text = build_log_entry(po_number, tracking_numbers, total_cost)
 
         try:
-            await add_job_log(job_id, log_text)
-            print(f"      ✓ Job Log added")
+            await add_tracker_entry(client, job_id, log_text)
+            print(f"      ✓ Tracker entry added")
             result["logs_added"] += 1
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
-                msg = f"Job #{job_id} (PO {po_number}) not found in Syncore — manual entry required"
-            else:
-                msg = (
-                    f"API error for Job #{job_id} (PO {po_number}): "
-                    f"HTTP {exc.response.status_code}"
-                )
-            print(f"      ✗ {msg}")
-            result["errors"].append(msg)
+            detail = exc.response.text[:200].strip()
+            msg = (
+                f"HTTP {exc.response.status_code} for Job #{job_id} (PO {po_number})"
+            )
+            print(f"      ✗ {msg} — added to manual entry email")
+            if detail:
+                print(f"        Syncore says: {detail}")
+            result["manual_entries"].append({
+                "job_id": job_id,
+                "po_number": po_number,
+                "log_text": log_text,
+            })
         except Exception as exc:
             msg = f"Unexpected error for Job #{job_id} (PO {po_number}): {exc}"
             print(f"      ✗ {msg}")
@@ -482,72 +533,108 @@ async def main() -> None:
     print(f"  UPS Tracking Import  —  {today_str}")
     print(f"{'='*55}")
 
-    if not SYNCORE_API_KEY:
-        print("\nERROR: SYNCORE_API_KEY is not set.")
+    if not SYNCORE_USERNAME or not SYNCORE_PASSWORD:
+        print("\nERROR: SYNCORE_USERNAME and/or SYNCORE_PASSWORD are not set.")
         return
 
-    # Download today's files to a temp directory
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        try:
-            all_files = download_todays_files(tmp_dir)
-        except Exception as exc:
-            print(f"\nERROR downloading files from Google Drive: {exc}")
+    # Log in to Syncore once; reuse the session for all jobs
+    async with httpx.AsyncClient(
+        timeout=HTTP_TIMEOUT, follow_redirects=True
+    ) as syncore_client:
+        logged_in = await syncore_login(syncore_client)
+        if not logged_in:
             send_email(
-                subject=f"UPS Import Failed — Drive Error ({today_str})",
-                body=f"The UPS import could not download files from Google Drive:\n\n{exc}",
-            )
-            return
-
-        if not all_files:
-            print(f"\n  No UPS files found for {date.today().strftime('%Y%m%d')}. Nothing to do.")
-            return
-
-        print(f"  Files found: {len(all_files)}\n")
-
-        # Split out suboutcorex files
-        suboutcorex = [f for f in all_files if "suboutcorex" in os.path.basename(f).lower()]
-        processable = [f for f in all_files if "suboutcorex" not in os.path.basename(f).lower()]
-
-        if suboutcorex:
-            names = [os.path.basename(f) for f in suboutcorex]
-            print(f"  [NOTICE] Skipping {len(suboutcorex)} suboutcorex file(s): {', '.join(names)}")
-            send_email(
-                subject=f"UPS Import — Manual Review Required ({today_str})",
+                subject=f"UPS Import Failed — Syncore Login Error ({today_str})",
                 body=(
-                    f"The following UPS file(s) contain 'suboutcorex' in the filename "
-                    f"and were NOT automatically imported. Please review them manually:\n\n"
-                    + "\n".join(f"  • {n}" for n in names)
+                    "The UPS import could not log in to Syncore.\n\n"
+                    "Check that SYNCORE_USERNAME and SYNCORE_PASSWORD are correct."
                 ),
             )
-
-        if not processable:
-            print("  No processable files remaining.")
             return
 
-        all_results = []
-        for filepath in processable:
-            result = await process_file(filepath)
-            all_results.append(result)
+        # Download today's files to a temp directory
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            try:
+                all_files = download_todays_files(tmp_dir)
+            except Exception as exc:
+                print(f"\nERROR downloading files from Google Drive: {exc}")
+                send_email(
+                    subject=f"UPS Import Failed — Drive Error ({today_str})",
+                    body=f"The UPS import could not download files from Google Drive:\n\n{exc}",
+                )
+                return
 
-    # Temp directory is cleaned up here automatically
+            if not all_files:
+                print(f"\n  No UPS files found for {date.today().strftime('%Y%m%d')}. Nothing to do.")
+                return
+
+            print(f"  Files found: {len(all_files)}\n")
+
+            # Split out suboutcorex files
+            suboutcorex = [f for f in all_files if "suboutcorex" in os.path.basename(f).lower()]
+            processable = [f for f in all_files if "suboutcorex" not in os.path.basename(f).lower()]
+
+            if suboutcorex:
+                names = [os.path.basename(f) for f in suboutcorex]
+                print(f"  [NOTICE] Skipping {len(suboutcorex)} suboutcorex file(s): {', '.join(names)}")
+                send_email(
+                    subject=f"UPS Import — Manual Review Required ({today_str})",
+                    body=(
+                        f"The following UPS file(s) contain 'suboutcorex' in the filename "
+                        f"and were NOT automatically imported. Please review them manually:\n\n"
+                        + "\n".join(f"  • {n}" for n in names)
+                    ),
+                )
+
+            if not processable:
+                print("  No processable files remaining.")
+                return
+
+            all_results = []
+            for filepath in processable:
+                result = await process_file(filepath, syncore_client)
+                all_results.append(result)
+
+    # async with syncore_client and temp directory are both cleaned up here
 
     total_logs = sum(r["logs_added"] for r in all_results)
+    all_manual = [e for r in all_results for e in r["manual_entries"]]
     all_errors = [err for r in all_results for err in r["errors"]]
 
     print(f"\n{'='*55}")
-    print(f"  Job Logs added : {total_logs}")
-    print(f"  Errors         : {len(all_errors)}")
+    print(f"  Job Logs added   : {total_logs}")
+    print(f"  Manual entries   : {len(all_manual)}")
+    print(f"  Errors           : {len(all_errors)}")
     print(f"{'='*55}\n")
+
+    if all_manual:
+        sep = "-" * 48
+        blocks = []
+        for entry in all_manual:
+            blocks.append(
+                f"Job #{entry['job_id']} — PO {entry['po_number']}\n"
+                f"{sep}\n"
+                f"{entry['log_text']}"
+            )
+        send_email(
+            subject=f"UPS Import — Manual Entry Required ({today_str})",
+            body=(
+                f"The UPS tracking import ran on {today_str}.\n"
+                f"The Syncore job log API is currently unavailable, so the "
+                f"{len(all_manual)} entry/entries below could not be added automatically.\n\n"
+                f"For each job, open it in Syncore and paste the entry into the Job Log tab.\n\n"
+                f"{'=' * 48}\n"
+                + f"\n\n{'=' * 48}\n".join(blocks)
+                + f"\n{'=' * 48}"
+            ),
+        )
 
     if all_errors:
         send_email(
-            subject=f"UPS Import Errors — Manual Entry Required ({today_str})",
+            subject=f"UPS Import Errors ({today_str})",
             body=(
-                f"The UPS tracking import ran on {today_str} but could not automatically "
-                f"add the following entries to Syncore.\n\n"
-                f"Please add these manually:\n\n"
+                f"The UPS tracking import on {today_str} encountered unexpected errors:\n\n"
                 + "\n".join(f"  • {err}" for err in all_errors)
-                + "\n\nAll other entries were imported successfully."
             ),
         )
 
