@@ -200,6 +200,7 @@ async def syncore_login(client: httpx.AsyncClient) -> bool:
     )
 
     final_url = str(resp.url)
+    print(f"  [Syncore] Post-login redirect URL: {final_url}")
     if "/Account/Login" in final_url:
         print("  [Syncore] Login failed — check SYNCORE_USERNAME / SYNCORE_PASSWORD")
         return False
