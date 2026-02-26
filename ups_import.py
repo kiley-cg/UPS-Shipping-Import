@@ -413,7 +413,7 @@ def group_by_po(rows: list[dict]) -> tuple[dict, list[dict]]:
 # ---------------------------------------------------------------------------
 
 def build_log_entry(po_number: str, tracking_numbers: list[str], total_cost: float) -> str:
-    today_str = date.today().strftime("%m/%d/%Y")
+    today_str = datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%m/%d/%Y")
     pkg_count = len(tracking_numbers)
     pkg_label = "package" if pkg_count == 1 else "packages"
     tracking_str = "\n  ".join(tracking_numbers)
@@ -468,6 +468,7 @@ async def process_file(filepath: str, client: httpx.AsyncClient) -> dict:
     result: dict = {
         "file": filename,
         "logs_added": 0,
+        "logs_added_details": [],  # details of each successfully posted entry
         "manual_entries": [],  # jobs the CSR must add to Syncore manually
         "errors": [],
         "skipped_no_po": [],
@@ -504,6 +505,12 @@ async def process_file(filepath: str, client: httpx.AsyncClient) -> dict:
             await add_tracker_entry(client, job_id, log_text)
             print(f"      ✓ Tracker entry added")
             result["logs_added"] += 1
+            result["logs_added_details"].append({
+                "po_number": po_number,
+                "job_id": job_id,
+                "tracking_numbers": tracking_numbers,
+                "total_cost": total_cost,
+            })
         except httpx.HTTPStatusError as exc:
             detail = exc.response.text[:200].strip()
             msg = (
@@ -526,14 +533,88 @@ async def process_file(filepath: str, client: httpx.AsyncClient) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Run summary email
+# ---------------------------------------------------------------------------
+
+def _build_run_summary(
+    today_str: str,
+    files_processed: list[str],
+    added: list[dict],
+    manual: list[dict],
+    skipped_no_po: list[str],
+    suboutcorex_names: list[str],
+    errors: list[str],
+) -> str:
+    sep = "─" * 48
+    lines: list[str] = [
+        f"UPS Tracking Import — {today_str}",
+        f"Files processed: {len(files_processed)}"
+        + (f"  ({', '.join(files_processed)})" if files_processed else ""),
+        "",
+    ]
+
+    # ── Successfully added ────────────────────────────────────────────────
+    lines.append(f"✓ ADDED TO SYNCORE ({len(added)} job log {'entry' if len(added) == 1 else 'entries'})")
+    lines.append(sep)
+    if added:
+        for item in added:
+            pkg_label = "package" if len(item["tracking_numbers"]) == 1 else "packages"
+            lines.append(
+                f"PO {item['po_number']} — Job #{item['job_id']}\n"
+                f"  {len(item['tracking_numbers'])} {pkg_label} | ${item['total_cost']:.2f}\n"
+                + "\n".join(f"  {t}" for t in item["tracking_numbers"])
+            )
+    else:
+        lines.append("  (none)")
+    lines.append("")
+
+    # ── Manual entry required ─────────────────────────────────────────────
+    if manual:
+        lines.append(f"⚠ MANUAL ENTRY REQUIRED ({len(manual)} {'entry' if len(manual) == 1 else 'entries'})")
+        lines.append(sep)
+        lines.append("These could not be posted to Syncore automatically.")
+        lines.append("Open each job and paste the text below into the Job Log tab.\n")
+        for entry in manual:
+            lines.append(f"Job #{entry['job_id']} — PO {entry['po_number']}")
+            lines.append(entry["log_text"])
+        lines.append("")
+
+    # ── No PO found ───────────────────────────────────────────────────────
+    if skipped_no_po:
+        lines.append(f"⚠ SKIPPED — NO PO NUMBER FOUND ({len(skipped_no_po)} tracking {'number' if len(skipped_no_po) == 1 else 'numbers'})")
+        lines.append(sep)
+        lines.extend(f"  {t}" for t in skipped_no_po)
+        lines.append("")
+
+    # ── Suboutcorex files ─────────────────────────────────────────────────
+    if suboutcorex_names:
+        lines.append(f"⚠ SKIPPED — SUBOUTCOREX FILES ({len(suboutcorex_names)} file{'s' if len(suboutcorex_names) != 1 else ''})")
+        lines.append(sep)
+        lines.append("These files require manual review and were not imported:")
+        lines.extend(f"  • {n}" for n in suboutcorex_names)
+        lines.append("")
+
+    # ── Errors ────────────────────────────────────────────────────────────
+    if errors:
+        lines.append(f"⚠ ERRORS ({len(errors)})")
+        lines.append(sep)
+        lines.extend(f"  • {e}" for e in errors)
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 async def main() -> None:
-    today_str = date.today().strftime("%Y-%m-%d")
+    today_str = datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%Y-%m-%d")
     print(f"{'='*55}")
     print(f"  UPS Tracking Import  —  {today_str}")
     print(f"{'='*55}")
+
+    suboutcorex_names: list[str] = []
 
     if not SYNCORE_USERNAME or not SYNCORE_PASSWORD:
         print("\nERROR: SYNCORE_USERNAME and/or SYNCORE_PASSWORD are not set.")
@@ -577,7 +658,8 @@ async def main() -> None:
             processable = [f for f in all_files if "suboutcorex" not in os.path.basename(f).lower()]
 
             if suboutcorex:
-                names = [os.path.basename(f) for f in suboutcorex]
+                suboutcorex_names = [os.path.basename(f) for f in suboutcorex]
+                names = suboutcorex_names
                 print(f"  [NOTICE] Skipping {len(suboutcorex)} suboutcorex file(s): {', '.join(names)}")
                 send_email(
                     subject=f"UPS Import — Manual Review Required ({today_str})",
@@ -639,6 +721,29 @@ async def main() -> None:
                 + "\n".join(f"  • {err}" for err in all_errors)
             ),
         )
+
+    # Always send the CSR a full run summary
+    all_added_details = [d for r in all_results for d in r["logs_added_details"]]
+    all_skipped_no_po = [t for r in all_results for t in r["skipped_no_po"]]
+    files_processed = [r["file"] for r in all_results]
+    needs_attention = bool(all_manual or all_skipped_no_po or suboutcorex_names or all_errors)
+    summary_subject = (
+        f"UPS Import — Action Required ({today_str})"
+        if needs_attention
+        else f"UPS Import Complete ({today_str})"
+    )
+    send_email(
+        subject=summary_subject,
+        body=_build_run_summary(
+            today_str,
+            files_processed,
+            all_added_details,
+            all_manual,
+            all_skipped_no_po,
+            suboutcorex_names,
+            all_errors,
+        ),
+    )
 
 
 if __name__ == "__main__":
