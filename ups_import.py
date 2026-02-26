@@ -171,20 +171,6 @@ def _headers() -> dict:
     }
 
 
-async def probe_logs_endpoint(job_id: int) -> None:
-    """GET the logs endpoint once to diagnose if it exists.
-
-    Prints a single diagnostic line and returns — does not raise.
-    """
-    url = f"{API_BASE}/orders/jobs/{job_id}/logs"
-    try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            resp = await client.get(url, headers=_headers())
-        print(f"  [Diagnostic] GET {url} → HTTP {resp.status_code}: {resp.text[:200].strip()}")
-    except Exception as exc:
-        print(f"  [Diagnostic] GET {url} → error: {exc}")
-
-
 async def add_job_log(job_id: int, description: str) -> dict:
     """POST a Job Log entry to a Syncore job."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
@@ -433,6 +419,7 @@ async def process_file(filepath: str) -> dict:
     result: dict = {
         "file": filename,
         "logs_added": 0,
+        "manual_entries": [],  # jobs the CSR must add to Syncore manually
         "errors": [],
         "skipped_no_po": [],
     }
@@ -451,11 +438,6 @@ async def process_file(filepath: str) -> dict:
         skipped = [r["tracking"] for r in no_po]
         print(f"    Skipped (no PO#): {len(skipped)}")
         result["skipped_no_po"] = skipped
-
-    # Probe the logs endpoint once with the first real job ID to diagnose 404s.
-    first_group = next(iter(sorted(groups.items())), None)
-    if first_group:
-        await probe_logs_endpoint(first_group[1]["job_id"])
 
     for po_number, group in sorted(groups.items()):
         job_id = group["job_id"]
@@ -476,16 +458,21 @@ async def process_file(filepath: str) -> dict:
         except httpx.HTTPStatusError as exc:
             detail = exc.response.text[:300].strip()
             if exc.response.status_code == 404:
-                msg = f"Job #{job_id} (PO {po_number}) not found in Syncore — manual entry required"
+                print(f"      ✗ Syncore job log API unavailable — added to manual entry email")
+                result["manual_entries"].append({
+                    "job_id": job_id,
+                    "po_number": po_number,
+                    "log_text": log_text,
+                })
             else:
                 msg = (
                     f"API error for Job #{job_id} (PO {po_number}): "
                     f"HTTP {exc.response.status_code}"
                 )
-            print(f"      ✗ {msg}")
-            if detail:
-                print(f"        Syncore says: {detail}")
-            result["errors"].append(f"{msg} | API response: {detail}")
+                print(f"      ✗ {msg}")
+                if detail:
+                    print(f"        Syncore says: {detail}")
+                result["errors"].append(f"{msg} | API response: {detail}")
         except Exception as exc:
             msg = f"Unexpected error for Job #{job_id} (PO {po_number}): {exc}"
             print(f"      ✗ {msg}")
@@ -554,22 +541,43 @@ async def main() -> None:
     # Temp directory is cleaned up here automatically
 
     total_logs = sum(r["logs_added"] for r in all_results)
+    all_manual = [e for r in all_results for e in r["manual_entries"]]
     all_errors = [err for r in all_results for err in r["errors"]]
 
     print(f"\n{'='*55}")
-    print(f"  Job Logs added : {total_logs}")
-    print(f"  Errors         : {len(all_errors)}")
+    print(f"  Job Logs added   : {total_logs}")
+    print(f"  Manual entries   : {len(all_manual)}")
+    print(f"  Errors           : {len(all_errors)}")
     print(f"{'='*55}\n")
+
+    if all_manual:
+        sep = "-" * 48
+        blocks = []
+        for entry in all_manual:
+            blocks.append(
+                f"Job #{entry['job_id']} — PO {entry['po_number']}\n"
+                f"{sep}\n"
+                f"{entry['log_text']}"
+            )
+        send_email(
+            subject=f"UPS Import — Manual Entry Required ({today_str})",
+            body=(
+                f"The UPS tracking import ran on {today_str}.\n"
+                f"The Syncore job log API is currently unavailable, so the "
+                f"{len(all_manual)} entry/entries below could not be added automatically.\n\n"
+                f"For each job, open it in Syncore and paste the entry into the Job Log tab.\n\n"
+                f"{'=' * 48}\n"
+                + f"\n\n{'=' * 48}\n".join(blocks)
+                + f"\n{'=' * 48}"
+            ),
+        )
 
     if all_errors:
         send_email(
-            subject=f"UPS Import Errors — Manual Entry Required ({today_str})",
+            subject=f"UPS Import Errors ({today_str})",
             body=(
-                f"The UPS tracking import ran on {today_str} but could not automatically "
-                f"add the following entries to Syncore.\n\n"
-                f"Please add these manually:\n\n"
+                f"The UPS tracking import on {today_str} encountered unexpected errors:\n\n"
                 + "\n".join(f"  • {err}" for err in all_errors)
-                + "\n\nAll other entries were imported successfully."
             ),
         )
 
