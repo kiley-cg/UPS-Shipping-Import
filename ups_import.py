@@ -66,6 +66,9 @@ HTTP_TIMEOUT = 30
 # Regex: Syncore PO number  e.g. "31987-1", "32073-2"
 PO_PATTERN = re.compile(r"^\d{5,6}-\d+$")
 
+# Regex: SRF reference number  e.g. "SRF-1234", "SRF-ABC"
+SRF_PATTERN = re.compile(r"^SRF-", re.IGNORECASE)
+
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 
@@ -236,17 +239,42 @@ async def add_tracker_entry(
 # Excel parsing
 # ---------------------------------------------------------------------------
 
-def _extract_po(ref1, ref2) -> str | None:
-    """Return the first value matching the Syncore PO pattern, or None."""
-    for raw in (ref1, ref2):
+def _extract_po(ref1, ref2, ref3=None, ref4=None) -> tuple[str | None, str | None]:
+    """Search all four reference fields for a Syncore PO or SRF number.
+
+    Returns (po_number, srf_number); at most one will be non-None.
+    Also recognises embedded POs in compound strings like
+    "111787-32043-1" → po "32043-1" (prefers 5-digit job prefix over 6-digit).
+    """
+    for raw in (ref1, ref2, ref3, ref4):
         val = str(raw or "").strip()
+        if not val:
+            continue
         # Strip common "PO " prefix (e.g. "PO 31987-1" → "31987-1")
         if val.upper().startswith("PO "):
             val = val[3:].strip()
-        # Skip Excel scientific notation floats (e.g. "1.4752e+10")
+        # Exact PO match
         if PO_PATTERN.match(val):
-            return val
-    return None
+            return val, None
+        # SRF reference number (e.g. "SRF-1234")
+        if SRF_PATTERN.match(val):
+            return None, val
+        # Embedded PO in compound string (e.g. "111787-32043-1" → "32043-1").
+        # Split on dashes, check all consecutive-pair candidates; prefer the
+        # last 5-digit prefix match over any 6-digit prefix match.
+        parts = val.split("-")
+        five_digit_match = six_digit_match = None
+        for i in range(len(parts) - 1):
+            candidate = f"{parts[i]}-{parts[i + 1]}"
+            if parts[i].isdigit() and PO_PATTERN.match(candidate):
+                if len(parts[i]) == 5:
+                    five_digit_match = candidate  # keep updating → last wins
+                elif len(parts[i]) == 6:
+                    six_digit_match = candidate
+        embedded = five_digit_match or six_digit_match
+        if embedded:
+            return embedded, None
+    return None, None
 
 
 def _parse_csv_file(filepath: str) -> list[dict]:
@@ -254,6 +282,7 @@ def _parse_csv_file(filepath: str) -> list[dict]:
     import csv
 
     col_tracking = col_neg_charge = col_ref1 = col_ref2 = col_shipper = None
+    col_ref3 = col_ref4 = None  # Shipment Reference Number / Value 2
 
     with open(filepath, newline="", encoding="utf-8-sig") as fh:
         reader = csv.reader(fh)
@@ -274,6 +303,12 @@ def _parse_csv_file(filepath: str) -> list[dict]:
                 col_ref2 = normalized.index("package reference number value 2")
             if "shipper name" in normalized:
                 col_shipper = normalized.index("shipper name")
+            # Columns F/G: Shipment Reference Number and Value 2
+            for col_idx, hdr in enumerate(normalized):
+                if "shipment reference number" in hdr and "value" not in hdr and col_ref3 is None:
+                    col_ref3 = col_idx
+                elif "shipment reference" in hdr and "value" in hdr and col_ref4 is None:
+                    col_ref4 = col_idx
             break
 
     if header_row_idx is None:
@@ -307,9 +342,11 @@ def _parse_csv_file(filepath: str) -> list[dict]:
 
         ref1 = row[col_ref1] if col_ref1 < len(row) else None
         ref2 = row[col_ref2] if col_ref2 < len(row) else None
-        po_number = _extract_po(ref1, ref2)
+        ref3 = row[col_ref3] if col_ref3 is not None and col_ref3 < len(row) else None
+        ref4 = row[col_ref4] if col_ref4 is not None and col_ref4 < len(row) else None
+        po_number, srf_number = _extract_po(ref1, ref2, ref3, ref4)
         shipper = str(row[col_shipper] or "").strip() if col_shipper is not None and col_shipper < len(row) else ""
-        rows.append({"tracking": tracking, "ups_cost": ups_cost, "po_number": po_number, "shipper": shipper})
+        rows.append({"tracking": tracking, "ups_cost": ups_cost, "po_number": po_number, "srf_number": srf_number, "shipper": shipper})
 
     return rows
 
@@ -333,6 +370,7 @@ def parse_ups_file(filepath: str) -> list[dict]:
     ws = wb.active
 
     col_tracking = col_neg_charge = col_ref1 = col_ref2 = col_shipper = None
+    col_ref3 = col_ref4 = None  # Shipment Reference Number / Value 2
     header_row_idx = None
 
     for row_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
@@ -348,6 +386,12 @@ def parse_ups_file(filepath: str) -> list[dict]:
                 col_ref2 = normalized.index("package reference number value 2")
             if "shipper name" in normalized:
                 col_shipper = normalized.index("shipper name")
+            # Columns F/G: Shipment Reference Number and Value 2
+            for col_idx, hdr in enumerate(normalized):
+                if "shipment reference number" in hdr and "value" not in hdr and col_ref3 is None:
+                    col_ref3 = col_idx
+                elif "shipment reference" in hdr and "value" in hdr and col_ref4 is None:
+                    col_ref4 = col_idx
             break
 
     if header_row_idx is None:
@@ -377,44 +421,50 @@ def parse_ups_file(filepath: str) -> list[dict]:
         except (TypeError, ValueError):
             ups_cost = 0.0
 
-        po_number = _extract_po(row[col_ref1], row[col_ref2])
+        ref3 = row[col_ref3] if col_ref3 is not None else None
+        ref4 = row[col_ref4] if col_ref4 is not None else None
+        po_number, srf_number = _extract_po(row[col_ref1], row[col_ref2], ref3, ref4)
         shipper = str(row[col_shipper] or "").strip() if col_shipper is not None else ""
-        rows.append({"tracking": tracking, "ups_cost": ups_cost, "po_number": po_number, "shipper": shipper})
+        rows.append({"tracking": tracking, "ups_cost": ups_cost, "po_number": po_number, "srf_number": srf_number, "shipper": shipper})
 
     wb.close()
     return rows
 
 
-def group_by_po(rows: list[dict]) -> tuple[dict, list[dict]]:
+def group_by_po(rows: list[dict]) -> tuple[dict, list[dict], list[dict]]:
     """
     Group rows by PO number.
 
     Returns:
-        groups  – {po_number: {po_number, job_id, tracking_numbers, total_cost}}
-        no_po   – rows where no Syncore PO number was found
+        groups   – {po_number: {po_number, job_id, tracking_numbers, total_cost}}
+        no_po    – rows where no Syncore PO or SRF number was found
+        srf_rows – rows that have an SRF reference number (not a Syncore PO)
     """
     groups: dict[str, dict] = {}
     no_po: list[dict] = []
+    srf_rows: list[dict] = []
 
     for row in rows:
         po = row["po_number"]
-        if not po:
+        srf = row.get("srf_number")
+
+        if po:
+            if po not in groups:
+                job_id = int(po.split("-")[0])  # "31987" from "31987-1"
+                groups[po] = {
+                    "po_number": po,
+                    "job_id": job_id,
+                    "tracking_numbers": [],
+                    "total_cost": 0.0,
+                }
+            groups[po]["tracking_numbers"].append(row["tracking"])
+            groups[po]["total_cost"] = round(groups[po]["total_cost"] + row["ups_cost"], 2)
+        elif srf:
+            srf_rows.append(row)
+        else:
             no_po.append(row)
-            continue
 
-        if po not in groups:
-            job_id = int(po.split("-")[0])  # "31987" from "31987-1"
-            groups[po] = {
-                "po_number": po,
-                "job_id": job_id,
-                "tracking_numbers": [],
-                "total_cost": 0.0,
-            }
-
-        groups[po]["tracking_numbers"].append(row["tracking"])
-        groups[po]["total_cost"] = round(groups[po]["total_cost"] + row["ups_cost"], 2)
-
-    return groups, no_po
+    return groups, no_po, srf_rows
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +531,7 @@ async def process_file(filepath: str, client: httpx.AsyncClient) -> dict:
         "manual_entries": [],  # jobs the CSR must add to Syncore manually
         "errors": [],
         "skipped_no_po": [],
+        "skipped_srf": [],  # rows with SRF reference numbers (need manual lookup)
     }
 
     try:
@@ -491,11 +542,15 @@ async def process_file(filepath: str, client: httpx.AsyncClient) -> dict:
 
     print(f"    Rows found: {len(rows)}")
 
-    groups, no_po = group_by_po(rows)
+    groups, no_po, srf_rows = group_by_po(rows)
 
     if no_po:
         print(f"    Skipped (no PO#): {len(no_po)}")
         result["skipped_no_po"] = no_po
+
+    if srf_rows:
+        print(f"    Skipped (SRF ref): {len(srf_rows)}")
+        result["skipped_srf"] = srf_rows
 
     for po_number, group in sorted(groups.items()):
         job_id = group["job_id"]
@@ -550,6 +605,7 @@ def _build_run_summary(
     added: list[dict],
     manual: list[dict],
     skipped_no_po: list[dict],
+    skipped_srf: list[dict],
     suboutcorex_names: list[str],
     errors: list[str],
 ) -> str:
@@ -595,6 +651,19 @@ def _build_run_summary(
             shipper_label = f"  Shipper: {row['shipper']}" if row.get("shipper") else ""
             lines.append(
                 f"  {row['tracking']}  |  ${row['ups_cost']:.2f}"
+                + (f"\n{shipper_label}" if shipper_label else "")
+            )
+        lines.append("")
+
+    # ── SRF reference numbers ─────────────────────────────────────────────
+    if skipped_srf:
+        lines.append(f"⚠ SRF REFERENCES — MANUAL LOOKUP REQUIRED ({len(skipped_srf)} tracking {'number' if len(skipped_srf) == 1 else 'numbers'})")
+        lines.append(sep)
+        lines.append("These shipments have SRF reference numbers. Look up the job in Syncore and add manually.\n")
+        for row in skipped_srf:
+            shipper_label = f"  Shipper: {row['shipper']}" if row.get("shipper") else ""
+            lines.append(
+                f"  SRF: {row.get('srf_number', '')}  |  {row['tracking']}  |  ${row['ups_cost']:.2f}"
                 + (f"\n{shipper_label}" if shipper_label else "")
             )
         lines.append("")
@@ -738,8 +807,9 @@ async def main() -> None:
     # Always send the CSR a full run summary
     all_added_details = [d for r in all_results for d in r["logs_added_details"]]
     all_skipped_no_po = [t for r in all_results for t in r["skipped_no_po"]]
+    all_skipped_srf = [t for r in all_results for t in r["skipped_srf"]]
     files_processed = [r["file"] for r in all_results]
-    needs_attention = bool(all_manual or all_skipped_no_po or suboutcorex_names or all_errors)
+    needs_attention = bool(all_manual or all_skipped_no_po or all_skipped_srf or suboutcorex_names or all_errors)
     summary_subject = (
         f"UPS Import — Action Required ({today_str})"
         if needs_attention
@@ -753,6 +823,7 @@ async def main() -> None:
             all_added_details,
             all_manual,
             all_skipped_no_po,
+            all_skipped_srf,
             suboutcorex_names,
             all_errors,
         ),
