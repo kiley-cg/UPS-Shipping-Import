@@ -49,6 +49,7 @@ SYNCORE_WEB_BASE = "https://www.ateasesystems.net"
 GMAIL_USER = os.environ.get("GMAIL_USER", "")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 CSR_EMAIL = os.environ.get("CSR_EMAIL", "")
+ACCOUNTING_EMAIL = os.environ.get("ACCOUNTING_EMAIL", "accounting@colorgraphicswa.com")
 
 # Google Drive — set via GitHub Actions secrets or .env
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
@@ -277,7 +278,17 @@ def _extract_po(ref1, ref2, ref3=None, ref4=None) -> tuple[str | None, str | Non
     return None, None
 
 
-def _parse_csv_file(filepath: str) -> list[dict]:
+def _file_type(filename: str) -> str:
+    """Return 'OB' (OzlinkOB / outbound sales orders) or '3P' (Ozlink3P / third-party POs)."""
+    name = filename.lower()
+    if "ozlinkob" in name:
+        return "OB"
+    if "ozlink3p" in name:
+        return "3P"
+    return "unknown"
+
+
+def _parse_csv_file(filepath: str, file_type: str = "unknown") -> list[dict]:
     """Parse a UPS CSV file. Returns same format as the Excel parser."""
     import csv
 
@@ -301,8 +312,13 @@ def _parse_csv_file(filepath: str) -> list[dict]:
                 col_ref1 = normalized.index("package reference number value 1")
             if "package reference number value 2" in normalized:
                 col_ref2 = normalized.index("package reference number value 2")
-            if "shipper name" in normalized:
-                col_shipper = normalized.index("shipper name")
+            # Name column: OB uses "Ship To Name"; 3P/unknown use "Shipper Name"
+            if file_type == "OB":
+                if "ship to name" in normalized:
+                    col_shipper = normalized.index("ship to name")
+            else:
+                if "shipper name" in normalized:
+                    col_shipper = normalized.index("shipper name")
             # Columns F/G: Shipment Reference Number and Value 2
             for col_idx, hdr in enumerate(normalized):
                 if "shipment reference number" in hdr and "value" not in hdr and col_ref3 is None:
@@ -351,15 +367,15 @@ def _parse_csv_file(filepath: str) -> list[dict]:
     return rows
 
 
-def parse_ups_file(filepath: str) -> list[dict]:
+def parse_ups_file(filepath: str, file_type: str = "unknown") -> list[dict]:
     """
     Parse a UPS Excel or CSV file.  Returns a list of dicts with keys:
         tracking  – UPS tracking number (starts with 1Z)
         ups_cost  – Neg Total Charge (float)
-        po_number – Syncore PO number e.g. "31987-1" (str or None)
+        po_number – Syncore PO/SO number e.g. "31987-1" (str or None)
     """
     if filepath.lower().endswith(".csv"):
-        return _parse_csv_file(filepath)
+        return _parse_csv_file(filepath, file_type)
 
     try:
         import openpyxl
@@ -384,8 +400,13 @@ def parse_ups_file(filepath: str) -> list[dict]:
                 col_ref1 = normalized.index("package reference number value 1")
             if "package reference number value 2" in normalized:
                 col_ref2 = normalized.index("package reference number value 2")
-            if "shipper name" in normalized:
-                col_shipper = normalized.index("shipper name")
+            # Name column: OB uses "Ship To Name"; 3P/unknown use "Shipper Name"
+            if file_type == "OB":
+                if "ship to name" in normalized:
+                    col_shipper = normalized.index("ship to name")
+            else:
+                if "shipper name" in normalized:
+                    col_shipper = normalized.index("shipper name")
             # Columns F/G: Shipment Reference Number and Value 2
             for col_idx, hdr in enumerate(normalized):
                 if "shipment reference number" in hdr and "value" not in hdr and col_ref3 is None:
@@ -471,7 +492,7 @@ def group_by_po(rows: list[dict]) -> tuple[dict, list[dict], list[dict]]:
 # Job Log entry formatting
 # ---------------------------------------------------------------------------
 
-def build_log_entry(po_number: str, tracking_numbers: list[str], total_cost: float) -> str:
+def build_log_entry(po_number: str, tracking_numbers: list[str], total_cost: float, label: str = "PO") -> str:
     today_str = datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%m/%d/%Y")
     pkg_count = len(tracking_numbers)
     pkg_label = "package" if pkg_count == 1 else "packages"
@@ -479,7 +500,7 @@ def build_log_entry(po_number: str, tracking_numbers: list[str], total_cost: flo
 
     return (
         f"UPS Tracking Import — {today_str}\n"
-        f"PO: {po_number}\n"
+        f"{label}: {po_number}\n"
         f"Packages: {pkg_count} {pkg_label}\n"
         f"Tracking Number(s):\n  {tracking_str}\n"
         f"UPS Shipping Cost: ${total_cost:.2f}"
@@ -490,23 +511,27 @@ def build_log_entry(po_number: str, tracking_numbers: list[str], total_cost: flo
 # Email notifications
 # ---------------------------------------------------------------------------
 
-def send_email(subject: str, body: str) -> None:
-    """Send a plain-text notification email via Gmail SMTP."""
-    if not all([GMAIL_USER, GMAIL_APP_PASSWORD, CSR_EMAIL]):
+def send_email(subject: str, body: str, to: str | None = None) -> None:
+    """Send a plain-text notification email via Gmail SMTP.
+
+    ``to`` defaults to CSR_EMAIL when omitted.
+    """
+    recipient = to or CSR_EMAIL
+    if not all([GMAIL_USER, GMAIL_APP_PASSWORD, recipient]):
         print(f"[EMAIL NOT CONFIGURED]\nSubject: {subject}\n{body}\n")
         return
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = GMAIL_USER
-    msg["To"] = CSR_EMAIL
+    msg["To"] = recipient
     msg.attach(MIMEText(body, "plain"))
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_USER, CSR_EMAIL, msg.as_string())
-        print(f"  ✉  Email sent to {CSR_EMAIL}: {subject}")
+            server.sendmail(GMAIL_USER, recipient, msg.as_string())
+        print(f"  ✉  Email sent to {recipient}: {subject}")
     except Exception as exc:
         print(f"  ✗  Email failed: {exc}")
 
@@ -517,25 +542,30 @@ def send_email(subject: str, body: str) -> None:
 
 async def process_file(filepath: str, client: httpx.AsyncClient) -> dict:
     """
-    Parse one UPS Excel file and write tracker entries to Syncore.
+    Parse one UPS Excel/CSV file and write tracker entries to Syncore.
 
-    Returns a summary dict: {file, logs_added, manual_entries, errors, skipped_no_po}
+    Returns a summary dict with keys:
+        file, file_type, logs_added, logs_added_details,
+        manual_entries, errors, skipped_no_po, skipped_srf
     """
     filename = os.path.basename(filepath)
-    print(f"\n  [{filename}]")
+    ftype = _file_type(filename)
+    label = "SO" if ftype == "OB" else "PO"
+    print(f"\n  [{filename}]  ({ftype})")
 
     result: dict = {
         "file": filename,
+        "file_type": ftype,
         "logs_added": 0,
-        "logs_added_details": [],  # details of each successfully posted entry
-        "manual_entries": [],  # jobs the CSR must add to Syncore manually
+        "logs_added_details": [],
+        "manual_entries": [],
         "errors": [],
         "skipped_no_po": [],
-        "skipped_srf": [],  # rows with SRF reference numbers (need manual lookup)
+        "skipped_srf": [],
     }
 
     try:
-        rows = parse_ups_file(filepath)
+        rows = parse_ups_file(filepath, ftype)
     except Exception as exc:
         result["errors"].append(f"Parse error: {exc}")
         return result
@@ -545,7 +575,7 @@ async def process_file(filepath: str, client: httpx.AsyncClient) -> dict:
     groups, no_po, srf_rows = group_by_po(rows)
 
     if no_po:
-        print(f"    Skipped (no PO#): {len(no_po)}")
+        print(f"    Skipped (no {label}#): {len(no_po)}")
         result["skipped_no_po"] = no_po
 
     if srf_rows:
@@ -558,11 +588,11 @@ async def process_file(filepath: str, client: httpx.AsyncClient) -> dict:
         total_cost = group["total_cost"]
 
         print(
-            f"    PO {po_number} → Job #{job_id} | "
+            f"    {label} {po_number} → Job #{job_id} | "
             f"{len(tracking_numbers)} pkg(s) | ${total_cost:.2f}"
         )
 
-        log_text = build_log_entry(po_number, tracking_numbers, total_cost)
+        log_text = build_log_entry(po_number, tracking_numbers, total_cost, label)
 
         try:
             await add_tracker_entry(client, job_id, log_text)
@@ -576,9 +606,7 @@ async def process_file(filepath: str, client: httpx.AsyncClient) -> dict:
             })
         except httpx.HTTPStatusError as exc:
             detail = exc.response.text[:200].strip()
-            msg = (
-                f"HTTP {exc.response.status_code} for Job #{job_id} (PO {po_number})"
-            )
+            msg = f"HTTP {exc.response.status_code} for Job #{job_id} ({label} {po_number})"
             print(f"      ✗ {msg} — added to manual entry email")
             if detail:
                 print(f"        Syncore says: {detail}")
@@ -588,7 +616,7 @@ async def process_file(filepath: str, client: httpx.AsyncClient) -> dict:
                 "log_text": log_text,
             })
         except Exception as exc:
-            msg = f"Unexpected error for Job #{job_id} (PO {po_number}): {exc}"
+            msg = f"Unexpected error for Job #{job_id} ({label} {po_number}): {exc}"
             print(f"      ✗ {msg}")
             result["errors"].append(msg)
 
@@ -599,23 +627,14 @@ async def process_file(filepath: str, client: httpx.AsyncClient) -> dict:
 # Run summary email
 # ---------------------------------------------------------------------------
 
-def _build_run_summary(
-    today_str: str,
-    files_processed: list[str],
-    added: list[dict],
-    manual: list[dict],
-    skipped_no_po: list[dict],
-    skipped_srf: list[dict],
-    suboutcorex_names: list[str],
-    errors: list[str],
-) -> str:
+def _render_file_section(results: list[dict], label: str, name_col_label: str) -> list[str]:
+    """Render added/manual/no-match lines for one group of result dicts (OB or 3P)."""
     sep = "─" * 48
-    lines: list[str] = [
-        f"UPS Tracking Import — {today_str}",
-        f"Files processed: {len(files_processed)}"
-        + (f"  ({', '.join(files_processed)})" if files_processed else ""),
-        "",
-    ]
+    lines: list[str] = []
+
+    added = [d for r in results for d in r["logs_added_details"]]
+    manual = [e for r in results for e in r["manual_entries"]]
+    no_match = [t for r in results for t in r["skipped_no_po"]]
 
     # ── Successfully added ────────────────────────────────────────────────
     lines.append(f"✓ ADDED TO SYNCORE ({len(added)} job log {'entry' if len(added) == 1 else 'entries'})")
@@ -624,7 +643,7 @@ def _build_run_summary(
         for item in added:
             pkg_label = "package" if len(item["tracking_numbers"]) == 1 else "packages"
             lines.append(
-                f"PO {item['po_number']} — Job #{item['job_id']}\n"
+                f"{label} {item['po_number']} — Job #{item['job_id']}\n"
                 f"  {len(item['tracking_numbers'])} {pkg_label} | ${item['total_cost']:.2f}\n"
                 + "\n".join(f"  {t}" for t in item["tracking_numbers"])
             )
@@ -639,36 +658,83 @@ def _build_run_summary(
         lines.append("These could not be posted to Syncore automatically.")
         lines.append("Open each job and paste the text below into the Job Log tab.\n")
         for entry in manual:
-            lines.append(f"Job #{entry['job_id']} — PO {entry['po_number']}")
+            lines.append(f"Job #{entry['job_id']} — {label} {entry['po_number']}")
             lines.append(entry["log_text"])
         lines.append("")
 
-    # ── No PO found ───────────────────────────────────────────────────────
-    if skipped_no_po:
-        lines.append(f"⚠ SKIPPED — NO PO NUMBER FOUND ({len(skipped_no_po)} tracking {'number' if len(skipped_no_po) == 1 else 'numbers'})")
+    # ── No match found ────────────────────────────────────────────────────
+    if no_match:
+        n = len(no_match)
+        lines.append(f"⚠ NO {label} NUMBER FOUND ({n} tracking {'number' if n == 1 else 'numbers'})")
         lines.append(sep)
-        for row in skipped_no_po:
-            shipper_label = f"  Shipper: {row['shipper']}" if row.get("shipper") else ""
+        for row in no_match:
+            name_val = row.get("shipper", "")
+            name_line = f"  {name_col_label}: {name_val}" if name_val else ""
             lines.append(
                 f"  {row['tracking']}  |  ${row['ups_cost']:.2f}"
-                + (f"\n{shipper_label}" if shipper_label else "")
+                + (f"\n{name_line}" if name_line else "")
             )
         lines.append("")
 
-    # ── SRF reference numbers ─────────────────────────────────────────────
-    if skipped_srf:
-        lines.append(f"⚠ SRF REFERENCES — MANUAL LOOKUP REQUIRED ({len(skipped_srf)} tracking {'number' if len(skipped_srf) == 1 else 'numbers'})")
-        lines.append(sep)
-        lines.append("These shipments have SRF reference numbers. Look up the job in Syncore and add manually.\n")
-        for row in skipped_srf:
-            shipper_label = f"  Shipper: {row['shipper']}" if row.get("shipper") else ""
-            lines.append(
-                f"  SRF: {row.get('srf_number', '')}  |  {row['tracking']}  |  ${row['ups_cost']:.2f}"
-                + (f"\n{shipper_label}" if shipper_label else "")
-            )
+    return lines
+
+
+def _build_srf_email(today_str: str, srf_rows: list[dict]) -> str:
+    """Build the body for the SRF tracking email sent to accounting."""
+    sep = "─" * 48
+    lines = [
+        "SRF Tracking Information",
+        "",
+        sep,
+    ]
+    for row in srf_rows:
+        shipper_val = row.get("shipper", "")
+        shipper_line = f"  Shipper: {shipper_val}" if shipper_val else ""
+        lines.append(
+            f"  SRF: {row.get('srf_number', '')}  |  {row['tracking']}  |  ${row['ups_cost']:.2f}"
+            + (f"\n{shipper_line}" if shipper_line else "")
+        )
+    return "\n".join(lines)
+
+
+def _build_run_summary(
+    today_str: str,
+    ob_results: list[dict],
+    p3_results: list[dict],
+    suboutcorex_names: list[str],
+    errors: list[str],
+) -> str:
+    eq = "═" * 52
+    all_files = [r["file"] for r in ob_results + p3_results]
+    lines: list[str] = [
+        f"UPS Tracking Import — {today_str}",
+        f"Files processed: {len(all_files)}"
+        + (f"  ({', '.join(all_files)})" if all_files else ""),
+        "",
+    ]
+
+    # ── Outbound (OzlinkOB) ───────────────────────────────────────────────
+    lines.append(f"{eq}")
+    lines.append("  OUTBOUND — OzlinkOB (Sales Orders)")
+    lines.append(f"{eq}")
+    if ob_results:
+        lines.extend(_render_file_section(ob_results, label="SO", name_col_label="Ship To"))
+    else:
+        lines.append("  (no OzlinkOB file processed today)")
+        lines.append("")
+
+    # ── 3rd Party (Ozlink3P) ──────────────────────────────────────────────
+    lines.append(f"{eq}")
+    lines.append("  3RD PARTY — Ozlink3P (Purchase Orders)")
+    lines.append(f"{eq}")
+    if p3_results:
+        lines.extend(_render_file_section(p3_results, label="PO", name_col_label="Shipper"))
+    else:
+        lines.append("  (no Ozlink3P file processed today)")
         lines.append("")
 
     # ── Suboutcorex files ─────────────────────────────────────────────────
+    sep = "─" * 48
     if suboutcorex_names:
         lines.append(f"⚠ SKIPPED — SUBOUTCOREX FILES ({len(suboutcorex_names)} file{'s' if len(suboutcorex_names) != 1 else ''})")
         lines.append(sep)
@@ -763,22 +829,41 @@ async def main() -> None:
 
     # async with syncore_client and temp directory are both cleaned up here
 
+    ob_results = [r for r in all_results if r["file_type"] == "OB"]
+    p3_results = [r for r in all_results if r["file_type"] != "OB"]
+
     total_logs = sum(r["logs_added"] for r in all_results)
     all_manual = [e for r in all_results for e in r["manual_entries"]]
     all_errors = [err for r in all_results for err in r["errors"]]
+    all_skipped_no_po = [t for r in all_results for t in r["skipped_no_po"]]
+    # SRF rows only come from 3P files
+    all_skipped_srf = [t for r in p3_results for t in r["skipped_srf"]]
 
     print(f"\n{'='*55}")
     print(f"  Job Logs added   : {total_logs}")
     print(f"  Manual entries   : {len(all_manual)}")
+    print(f"  SRF rows         : {len(all_skipped_srf)}")
     print(f"  Errors           : {len(all_errors)}")
     print(f"{'='*55}\n")
+
+    # Send SRF info to accounting
+    if all_skipped_srf:
+        srf_date = datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%m/%d/%Y")
+        send_email(
+            subject=f"SRF Tracking Info ({srf_date})",
+            body=_build_srf_email(today_str, all_skipped_srf),
+            to=ACCOUNTING_EMAIL,
+        )
 
     if all_manual:
         sep = "-" * 48
         blocks = []
         for entry in all_manual:
+            # Determine label from log_text (starts with "SO:" or "PO:")
+            first_line = entry["log_text"].split("\n")[1] if "\n" in entry["log_text"] else ""
+            ref_label = "SO" if first_line.startswith("SO:") else "PO"
             blocks.append(
-                f"Job #{entry['job_id']} — PO {entry['po_number']}\n"
+                f"Job #{entry['job_id']} — {ref_label} {entry['po_number']}\n"
                 f"{sep}\n"
                 f"{entry['log_text']}"
             )
@@ -805,10 +890,6 @@ async def main() -> None:
         )
 
     # Always send the CSR a full run summary
-    all_added_details = [d for r in all_results for d in r["logs_added_details"]]
-    all_skipped_no_po = [t for r in all_results for t in r["skipped_no_po"]]
-    all_skipped_srf = [t for r in all_results for t in r["skipped_srf"]]
-    files_processed = [r["file"] for r in all_results]
     needs_attention = bool(all_manual or all_skipped_no_po or all_skipped_srf or suboutcorex_names or all_errors)
     summary_subject = (
         f"UPS Import — Action Required ({today_str})"
@@ -819,11 +900,8 @@ async def main() -> None:
         subject=summary_subject,
         body=_build_run_summary(
             today_str,
-            files_processed,
-            all_added_details,
-            all_manual,
-            all_skipped_no_po,
-            all_skipped_srf,
+            ob_results,
+            p3_results,
             suboutcorex_names,
             all_errors,
         ),
