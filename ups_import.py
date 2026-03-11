@@ -890,7 +890,7 @@ async def main() -> None:
         )
 
     # Always send the CSR a full run summary
-    needs_attention = bool(all_manual or all_skipped_no_po or all_skipped_srf or suboutcorex_names or all_errors)
+    needs_attention = bool(all_manual or all_skipped_no_po or suboutcorex_names or all_errors)
     summary_subject = (
         f"UPS Import — Action Required ({today_str})"
         if needs_attention
