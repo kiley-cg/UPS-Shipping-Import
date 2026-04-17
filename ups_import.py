@@ -243,16 +243,26 @@ def _extract_po(ref1, ref2, ref3=None, ref4=None) -> tuple[str | None, str | Non
     """Search all four reference fields for a Syncore PO or SRF number.
 
     Returns (po_number, srf_number); at most one will be non-None.
-    Also recognises embedded POs in compound strings like
-    "111787-32043-1" → po "32043-1" (prefers 5-digit job prefix over 6-digit).
+    Recognises:
+      - Exact PO numbers (e.g. "31987-1")
+      - "PO"/"WO" prefixes with optional "#" (e.g. "PO 31987-1",
+        "PO#31987-1", "WO# 32043-2")
+      - PO followed by ": description" (e.g. "32250-4: WSDOT EMB" → "32250-4")
+      - Embedded POs in compound strings (e.g. "111787-32043-1" → "32043-1";
+        prefers 5-digit job prefix over 6-digit)
     """
     for raw in (ref1, ref2, ref3, ref4):
         val = str(raw or "").strip()
         if not val:
             continue
-        # Strip common "PO " prefix (e.g. "PO 31987-1" → "31987-1")
-        if val.upper().startswith("PO "):
-            val = val[3:].strip()
+        # Strip "PO"/"WO" prefix with optional "#" (e.g. "PO 31987-1",
+        # "PO#31987-1", "WO# 31987-1" → "31987-1")
+        prefix_match = re.match(r"^(?:PO|WO)(?:\s+|#\s*)", val, re.IGNORECASE)
+        if prefix_match:
+            val = val[prefix_match.end():].strip()
+        # Drop description after colon (e.g. "32250-4: WSDOT EMB" → "32250-4")
+        if ":" in val:
+            val = val.split(":", 1)[0].strip()
         # Exact PO match
         if PO_PATTERN.match(val):
             return val, None
