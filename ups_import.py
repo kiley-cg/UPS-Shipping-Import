@@ -506,17 +506,20 @@ def send_email(subject: str, body: str) -> None:
         print(f"[EMAIL NOT CONFIGURED]\nSubject: {subject}\n{body}\n")
         return
 
+    # CSR_EMAIL may be a single address or a comma-separated list
+    recipients = [addr.strip() for addr in CSR_EMAIL.split(",") if addr.strip()]
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = GMAIL_USER
-    msg["To"] = CSR_EMAIL
+    msg["To"] = ", ".join(recipients)
     msg.attach(MIMEText(body, "plain"))
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_USER, CSR_EMAIL, msg.as_string())
-        print(f"  ✉  Email sent to {CSR_EMAIL}: {subject}")
+            server.sendmail(GMAIL_USER, recipients, msg.as_string())
+        print(f"  ✉  Email sent to {', '.join(recipients)}: {subject}")
     except Exception as exc:
         print(f"  ✗  Email failed: {exc}")
 
