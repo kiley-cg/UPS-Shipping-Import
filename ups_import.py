@@ -239,51 +239,59 @@ async def add_tracker_entry(
 # Excel parsing
 # ---------------------------------------------------------------------------
 
+def _match_ref_token(val: str) -> tuple[str | None, str | None]:
+    """Try to extract a PO or SRF number from a single reference token."""
+    val = val.strip()
+    if not val:
+        return None, None
+    # Strip "PO"/"WO" prefix with optional "#" (e.g. "PO 31987-1",
+    # "PO#31987-1", "WO# 31987-1" → "31987-1")
+    prefix_match = re.match(r"^(?:PO|WO)(?:\s+|#\s*)", val, re.IGNORECASE)
+    if prefix_match:
+        val = val[prefix_match.end():].strip()
+    # Drop description after colon (e.g. "32250-4: WSDOT EMB" → "32250-4")
+    if ":" in val:
+        val = val.split(":", 1)[0].strip()
+    # Exact PO match
+    if PO_PATTERN.match(val):
+        return val, None
+    # SRF reference number
+    if SRF_PATTERN.match(val):
+        return None, val
+    # Embedded PO in compound string (e.g. "111787-32043-1" → "32043-1").
+    # Split on dashes, check all consecutive-pair candidates; prefer the
+    # last 5-digit prefix match over any 6-digit prefix match.
+    parts = val.split("-")
+    five_digit_match = six_digit_match = None
+    for i in range(len(parts) - 1):
+        candidate = f"{parts[i]}-{parts[i + 1]}"
+        if parts[i].isdigit() and PO_PATTERN.match(candidate):
+            if len(parts[i]) == 5:
+                five_digit_match = candidate  # keep updating → last wins
+            elif len(parts[i]) == 6:
+                six_digit_match = candidate
+    embedded = five_digit_match or six_digit_match
+    if embedded:
+        return embedded, None
+    return None, None
+
+
 def _extract_po(ref1, ref2, ref3=None, ref4=None) -> tuple[str | None, str | None]:
     """Search all four reference fields for a Syncore PO or SRF number.
 
     Returns (po_number, srf_number); at most one will be non-None.
-    Recognises:
-      - Exact PO numbers (e.g. "31987-1")
-      - "PO"/"WO" prefixes with optional "#" (e.g. "PO 31987-1",
-        "PO#31987-1", "WO# 32043-2")
-      - PO followed by ": description" (e.g. "32250-4: WSDOT EMB" → "32250-4")
-      - Embedded POs in compound strings (e.g. "111787-32043-1" → "32043-1";
-        prefers 5-digit job prefix over 6-digit)
+    Cells containing multiple references separated by commas or semicolons
+    (e.g. "32183-2, 32183-4") are split into tokens and the first matching
+    token wins.
     """
     for raw in (ref1, ref2, ref3, ref4):
-        val = str(raw or "").strip()
-        if not val:
+        raw_val = str(raw or "").strip()
+        if not raw_val:
             continue
-        # Strip "PO"/"WO" prefix with optional "#" (e.g. "PO 31987-1",
-        # "PO#31987-1", "WO# 31987-1" → "31987-1")
-        prefix_match = re.match(r"^(?:PO|WO)(?:\s+|#\s*)", val, re.IGNORECASE)
-        if prefix_match:
-            val = val[prefix_match.end():].strip()
-        # Drop description after colon (e.g. "32250-4: WSDOT EMB" → "32250-4")
-        if ":" in val:
-            val = val.split(":", 1)[0].strip()
-        # Exact PO match
-        if PO_PATTERN.match(val):
-            return val, None
-        # SRF reference number (e.g. "SRF-1234")
-        if SRF_PATTERN.match(val):
-            return None, val
-        # Embedded PO in compound string (e.g. "111787-32043-1" → "32043-1").
-        # Split on dashes, check all consecutive-pair candidates; prefer the
-        # last 5-digit prefix match over any 6-digit prefix match.
-        parts = val.split("-")
-        five_digit_match = six_digit_match = None
-        for i in range(len(parts) - 1):
-            candidate = f"{parts[i]}-{parts[i + 1]}"
-            if parts[i].isdigit() and PO_PATTERN.match(candidate):
-                if len(parts[i]) == 5:
-                    five_digit_match = candidate  # keep updating → last wins
-                elif len(parts[i]) == 6:
-                    six_digit_match = candidate
-        embedded = five_digit_match or six_digit_match
-        if embedded:
-            return embedded, None
+        for token in re.split(r"[,;]", raw_val):
+            po, srf = _match_ref_token(token)
+            if po or srf:
+                return po, srf
     return None, None
 
 
