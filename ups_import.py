@@ -249,9 +249,9 @@ def _match_ref_token(val: str) -> tuple[str | None, str | None]:
     prefix_match = re.match(r"^(?:PO|WO)(?:\s+|#\s*)", val, re.IGNORECASE)
     if prefix_match:
         val = val[prefix_match.end():].strip()
-    # Drop description after colon (e.g. "32250-4: WSDOT EMB" → "32250-4")
-    if ":" in val:
-        val = val.split(":", 1)[0].strip()
+    # Drop description after ":" or "/" (e.g. "32250-4: WSDOT EMB" → "32250-4",
+    # "32218-4/ IMAGE SOURCE EMB" → "32218-4")
+    val = re.split(r"[:/]", val, 1)[0].strip()
     # Exact PO match
     if PO_PATTERN.match(val):
         return val, None
