@@ -280,15 +280,15 @@ def _extract_po(ref1, ref2, ref3=None, ref4=None) -> tuple[str | None, str | Non
     """Search all four reference fields for a Syncore PO or SRF number.
 
     Returns (po_number, srf_number); at most one will be non-None.
-    Cells containing multiple references separated by commas or semicolons
-    (e.g. "32183-2, 32183-4") are split into tokens and the first matching
-    token wins.
+    Cells containing multiple references separated by commas, semicolons,
+    or "&" (e.g. "32183-2, 32183-4", "32362-1 & 32362-3") are split into
+    tokens and the first matching token wins.
     """
     for raw in (ref1, ref2, ref3, ref4):
         raw_val = str(raw or "").strip()
         if not raw_val:
             continue
-        for token in re.split(r"[,;]", raw_val):
+        for token in re.split(r"[,;&]", raw_val):
             po, srf = _match_ref_token(token)
             if po or srf:
                 return po, srf
